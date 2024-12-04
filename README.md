@@ -1,7 +1,11 @@
 # Fracture detection in Low-Dose CT images using Neural Skeletons
 
 ## Description
-(tba)
+The objectives of this research work are as following:
+- Perform skeleton extraction from segmenetd rib cages acquired from CT scans in point cloud format using Neural Skeletons
+- Perform fracture detection on the skeleton of the rib cage
+- Classify fracture between simple classes (non-displaced, displaced, open, closed)
+- Investigate fracture detection accuracy and precision under low radiation dose constraints
 
 ## Authors
 - Manolis Nikolakakis
@@ -29,16 +33,12 @@ Run test with cave_rib point cloud
 python main.py input_file output_file
 ```
 
-Provide any additional information about command-line arguments, configuration files, or environment variables that users need to know.
-
 ## Running Tests
 Run test with cave_rib point cloud
 
 ```bash
-python main.py test/cave_rib_input/cave_sub_2_grid_size_x_2_grid_size_y_1_point_cloud.obj cave_medial.obj
+python main.py test/cave_rib_input/cave.xyz cave_skeleton.obj
 ```
-
-Or if you're using a different testing framework, provide the appropriate commands.
 
 ## License
 (tba)
