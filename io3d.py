@@ -84,7 +84,17 @@ def from_xyz_normals(path):
         n.append(np.array([float(t[3]), float(t[4]), float(t[5])]))
         s = f.readline()
     f.close()
-    return np.array(L), np.array(n)
+
+    # Convert to numpy arrays
+    points = np.array(L)
+    normals = np.array(n)
+    
+    # Normalize points to the range [-1, 1]
+    min_vals = np.min(points, axis=0)
+    max_vals = np.max(points, axis=0)
+    points_normalized = 2 * (points - min_vals) / (max_vals - min_vals) - 1
+    
+    return points_normalized, normals
 
 def from_skel(path):
     f = open(path, "r")
