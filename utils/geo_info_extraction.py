@@ -1,13 +1,9 @@
 from scipy.spatial import Delaunay
 import argparse
 import sys
-from collections import defaultdict
 import numpy as np
 from scipy.spatial import cKDTree
-import trimesh
 from sklearn.neighbors import NearestNeighbors
-from ripser import ripser
-from persim import plot_diagrams
 import pc_processor
 
 def analyze_obj_file(file_path):
@@ -35,10 +31,6 @@ def analyze_obj_file(file_path):
             edges.add(edge)
     num_edges = len(edges)
     
-    # Compute surface area and volume
-    surface_area = compute_surface_area(vertices, faces)
-    volume = compute_volume(vertices, faces)
-    
     # Compute Delaunay triangulation for additional analysis
     tri = Delaunay(vertices)
     edge_lengths = compute_edge_lengths(vertices, tri.simplices)
@@ -58,11 +50,8 @@ def analyze_obj_file(file_path):
     result = {
         "Mesh Statistics": {
             "Number of Vertices": num_vertices,
-            "Number of Edges": num_edges,
-            "Number of Faces": num_faces,
-            "Surface Area": f"{surface_area:.6f}",
-            "Volume": f"{volume:.6f}"
-        },
+            "Number of Edges": num_edges
+            },
         "Edge Analysis": {
             "Average Edge Length": f"{avg_edge_length:.6f}",
             "Maximum Edge Length": f"{max_edge_length:.6f}"
@@ -73,46 +62,6 @@ def analyze_obj_file(file_path):
         }
     }
     return result
-
-def compute_surface_area(vertices, faces):
-    """
-    Compute the surface area of a 3D mesh.
-    
-    Parameters:
-    vertices (np.ndarray): Vertex coordinates
-    faces (np.ndarray): Face indices
-    
-    Returns:
-    float: Surface area of the mesh
-    """
-    surface_area = 0
-    for face in faces:
-        p1 = vertices[face[0]]
-        p2 = vertices[face[1]]
-        p3 = vertices[face[2]]
-        surface_area += 0.5 * np.linalg.norm(np.cross(p2 - p1, p3 - p1))
-    return surface_area
-
-def compute_volume(vertices, faces):
-    """
-    Compute the volume of a 3D mesh.
-    
-    Parameters:
-    vertices (np.ndarray): Vertex coordinates
-    faces (np.ndarray): Face indices
-    
-    Returns:
-    float: Volume of the mesh
-    """
-    volume = 0
-    for face in faces:
-        p1 = vertices[face[0]]
-        p2 = vertices[face[1]]
-        p3 = vertices[face[2]]
-        volume += p1[0] * (p2[1] * p3[2] - p3[1] * p2[2])
-        volume -= p1[1] * (p2[0] * p3[2] - p3[0] * p2[2])
-        volume += p1[2] * (p2[0] * p3[1] - p3[0] * p2[1])
-    return abs(volume) / 6
 
 def compute_edge_lengths(vertices, simplices):
     """
@@ -187,18 +136,6 @@ def compute_mahalanobis_distance(points1, points2):
     diff = points2 - mean1
     mahalanobis_dist = np.sqrt(np.sum(np.dot(diff, inv_cov) * diff, axis=1))
     return np.mean(mahalanobis_dist)
-
-def compute_zscore_distance(points1, points2):
-    mean1 = np.mean(points1, axis=0)
-    std1 = np.std(points1, axis=0)
-    zscore = np.abs((points2 - mean1) / std1)
-    return np.mean(zscore)
-
-def compute_betti_numbers(points, max_dim=1):
-    # Compute persistent homology
-    diagrams = ripser(points, maxdim=max_dim)['dgms']
-    betti_numbers = [len(diagram) for diagram in diagrams]
-    return betti_numbers
 
 def analyze_fractures(subject_path, reference_path):
     # Load point clouds
