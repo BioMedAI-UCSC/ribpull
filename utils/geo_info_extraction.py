@@ -1,7 +1,5 @@
-import numpy as np
 from scipy.spatial import Delaunay
 import argparse
-import json
 import sys
 from collections import defaultdict
 import numpy as np
@@ -10,6 +8,7 @@ import trimesh
 from sklearn.neighbors import NearestNeighbors
 from ripser import ripser
 from persim import plot_diagrams
+import pc_processor
 
 def analyze_obj_file(file_path):
     """
@@ -22,7 +21,7 @@ def analyze_obj_file(file_path):
     dict: A dictionary containing various geometric properties of the mesh
     """
     # Load the OBJ file
-    vertices, faces = load_obj_file(file_path)
+    vertices, faces = pc_processor.load_obj_file(file_path)
     
     # Compute basic properties
     num_vertices = len(vertices)
@@ -74,30 +73,6 @@ def analyze_obj_file(file_path):
         }
     }
     return result
-
-def load_obj_file(file_path):
-    """
-    Load vertex and face data from an OBJ file.
-    
-    Parameters:
-    file_path (str): Path to the OBJ file
-    
-    Returns:
-    np.ndarray, np.ndarray: Vertex coordinates, face indices
-    """
-    vertices = []
-    faces = []
-    
-    with open(file_path, "r") as f:
-        for line in f:
-            if line.startswith("v "):
-                vertex = [float(x) for x in line.split()[1:4]]
-                vertices.append(vertex)
-            elif line.startswith("f "):
-                face = [int(x.split("/")[0]) - 1 for x in line.split()[1:4]]
-                faces.append(face)
-    
-    return np.array(vertices), np.array(faces)
 
 def compute_surface_area(vertices, faces):
     """
@@ -160,19 +135,6 @@ def compute_edge_lengths(vertices, simplices):
             p2 = vertices[simplex[(i + 1) % 3]]
             edge_lengths.append(np.linalg.norm(p2 - p1))
     return np.array(edge_lengths)
-
-def load_and_preprocess(obj_path):
-    """
-    Load an OBJ file and return vertices
-    """
-    vertices = []
-    with open(obj_path, 'r') as f:
-        for line in f:
-            if line.startswith('v '):
-                coords = line.split()[1:]
-                vertices.append([float(x) for x in coords])
-    raw_vertices = np.array(vertices)
-    return raw_vertices
 
 def compute_normals(points, k=10):
     # Compute normals using PCA on local neighborhoods
@@ -240,8 +202,8 @@ def compute_betti_numbers(points, max_dim=1):
 
 def analyze_fractures(subject_path, reference_path):
     # Load point clouds
-    subject_points = load_and_preprocess(subject_path)
-    reference_points = load_and_preprocess(reference_path)
+    subject_points = pc_processor.load_and_preprocess(subject_path)
+    reference_points = pc_processor.load_and_preprocess(reference_path)
     
     # Compute normals and detect discontinuities
     subject_normals = compute_normals(subject_points)
@@ -270,32 +232,6 @@ def analyze_fractures(subject_path, reference_path):
     
     return results
 
-def numpy_to_python(obj):
-    """Convert numpy types to native Python types for JSON serialization"""
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, np.integer):
-        return int(obj)
-    elif isinstance(obj, np.floating):
-        return float(obj)
-    elif isinstance(obj, dict):
-        return {key: numpy_to_python(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [numpy_to_python(item) for item in obj]
-    return obj
-
-# When you need to serialize your results:
-def save_results(fracture_results, output_file=None):
-    # Convert all numpy types to Python types
-    serializable_results = numpy_to_python(fracture_results)
-    
-    # Print or save to file
-    if output_file:
-        with open(output_file, 'w') as f:
-            json.dump(serializable_results, f, indent=2)
-    else:
-        print(json.dumps(serializable_results, indent=2))
-
 def main():
     parser = argparse.ArgumentParser(description="Perform geometric analysis on an OBJ file")
     parser.add_argument("file_path", help="Path to the OBJ file")
@@ -305,14 +241,14 @@ def main():
     input_file = args.file_path
     
     results = analyze_obj_file(input_file)
-    save_results(results, output_file=None)
+    pc_processor.save_results(results, output_file=None)
     if len(sys.argv) > 2:
         reference_file = args.reference_path
         fracture_results = analyze_fractures(input_file, reference_file)
-        save_results(fracture_results, output_file=None)
-        
-        
+        pc_processor.save_results(fracture_results, output_file=None)
+        pc_processor.save_obj_with_markers(input_file, pc_processor.load_and_preprocess(input_file), fracture_results['discontinuity_locations'])
 
+        
 import time
 start_time = time.time()
 
