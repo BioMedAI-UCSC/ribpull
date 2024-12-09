@@ -183,11 +183,21 @@ def compute_normals(points, k=10):
     
     return np.array(normals)
 
-def detect_discontinuities(normals, threshold=0.2):
-    # Compute angles between adjacent normals
-    angles = np.arccos(np.clip(np.sum(normals[:-1] * normals[1:], axis=1), -1.0, 1.0))
-    discontinuities = np.where(angles > threshold)[0]
-    return discontinuities
+def detect_discontinuities(points, normals, k=10, threshold=1.6):
+    # Find k nearest neighbors for each point
+    nbrs = NearestNeighbors(n_neighbors=k).fit(points)
+    _, indices = nbrs.kneighbors(points)
+    
+    discontinuities = []
+    for i, neighbors in enumerate(indices):
+        # Compare normal at point i with its neighbors
+        neighbor_angles = np.arccos(np.clip(
+            np.dot(normals[neighbors], normals[i]), -1.0, 1.0))
+        # If many neighbors have high angle difference
+        if np.mean(neighbor_angles) > threshold:
+            discontinuities.append(i)
+            
+    return np.array(discontinuities)
 
 def compute_chamfer_distance(points1, points2):
     tree1 = cKDTree(points1)
@@ -229,27 +239,54 @@ def analyze_fractures(subject_path, reference_path):
     subject_normals = compute_normals(subject_points)
     reference_normals = compute_normals(reference_points)
     
-    discontinuities = detect_discontinuities(subject_normals)
+    discontinuities = detect_discontinuities(subject_points, subject_normals)
     
     # Compute distances
     chamfer_dist = compute_chamfer_distance(subject_points, reference_points)
     mahalanobis_dist = compute_mahalanobis_distance(subject_points, reference_points)
-    zscore_dist = compute_zscore_distance(subject_points, reference_points)
+    # zscore_dist = compute_zscore_distance(subject_points, reference_points)
     
-    # Compute Betti numbers
-    subject_betti = compute_betti_numbers(subject_points)
-    reference_betti = compute_betti_numbers(reference_points)
-    
+    # Compute Betti numbers (not needed at the moment)
+    # subject_betti = compute_betti_numbers(subject_points)
+    # reference_betti = compute_betti_numbers(reference_points)
+
     results = {
         'discontinuity_locations': discontinuities,
+        'discontinuity_count': len(discontinuities),
         'chamfer_distance': chamfer_dist,
-        'mahalanobis_distance': mahalanobis_dist,
-        'zscore_distance': zscore_dist,
-        'subject_betti': subject_betti,
-        'reference_betti': reference_betti
+        'mahalanobis_distance': mahalanobis_dist
+        #'zscore_distance': zscore_dist,
+        #'subject_betti': subject_betti,
+        #'reference_betti': reference_betti
     }
     
     return results
+
+def numpy_to_python(obj):
+    """Convert numpy types to native Python types for JSON serialization"""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {key: numpy_to_python(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [numpy_to_python(item) for item in obj]
+    return obj
+
+# When you need to serialize your results:
+def save_results(fracture_results, output_file=None):
+    # Convert all numpy types to Python types
+    serializable_results = numpy_to_python(fracture_results)
+    
+    # Print or save to file
+    if output_file:
+        with open(output_file, 'w') as f:
+            json.dump(serializable_results, f, indent=2)
+    else:
+        print(json.dumps(serializable_results, indent=2))
 
 def main():
     parser = argparse.ArgumentParser(description="Perform geometric analysis on an OBJ file")
@@ -260,11 +297,11 @@ def main():
     input_file = args.file_path
     
     results = analyze_obj_file(input_file)
-    print(json.dumps(results, indent=2))
+    save_results(results, output_file=None)
     if len(sys.argv) > 2:
         reference_file = args.reference_path
         fracture_results = analyze_fractures(input_file, reference_file)
-        print(json.dumps(fracture_results, indent=2))
+        save_results(fracture_results, output_file=None)
         
         
 

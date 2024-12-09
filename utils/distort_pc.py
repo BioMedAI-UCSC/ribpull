@@ -6,15 +6,29 @@ def load_obj(file_path):
     """
     Load an OBJ file and return vertices
     """
+    vertices = []
+    with open(file_path, 'r') as f:
+        for line in f:
+            if line.startswith('v '):
+                coords = line.split()[1:]
+                vertices.append([float(x) for x in coords])
+    raw_vertices = np.array(vertices)
     mesh = trimesh.load_mesh(file_path)
-    return np.array(mesh.vertices), mesh.faces
+    return raw_vertices, mesh.faces
 
-def save_obj(file_path, vertices, faces):
+def save_obj(file_path, vertices, faces=None):
     """
-    Save vertices and faces to an OBJ file
+    Save vertices to an OBJ file as a point cloud.
+    
+    Args:
+        file_path (str): Output path for the OBJ file
+        vertices (numpy.ndarray): Array of vertex coordinates with shape (N, 3)
+        faces (None): Kept for compatibility but not used
     """
-    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-    mesh.export(file_path)
+    with open(file_path, 'w') as f:
+        # Write vertices
+        for v in vertices:
+            f.write(f'v {v[0]:.10f} {v[1]:.10f} {v[2]:.10f}\n')
 
 def add_gaussian_noise(points, std_dev=0.01):
     """
@@ -80,8 +94,7 @@ def process_obj_with_noise(input_path, output_path, noise_type='gaussian', **noi
     """
     # Load the OBJ file
     vertices, faces = load_obj(input_path)
-    
-    # Apply the selected noise type
+    # Using Gaussian for now, but other types of noise can be applied
     if noise_type == 'gaussian':
         noisy_vertices = add_gaussian_noise(vertices, **noise_params)
     elif noise_type == 'salt_pepper':
@@ -97,30 +110,9 @@ def process_obj_with_noise(input_path, output_path, noise_type='gaussian', **noi
     save_obj(output_path, noisy_vertices, faces)
 
 if __name__ == "__main__":
-    # Example usage
-    input_file = "input_mesh.obj"
-    output_file = "noisy_mesh.obj"
+    input_file = "../test/fromSkeletonLearning/bitore_skel.obj"
+    output_file = "../test/fromSkeletonLearning/noisy_bitore_skel.obj"
     
-    # Example with Gaussian noise
     process_obj_with_noise(input_file, output_file, 
                           noise_type='gaussian', 
                           std_dev=0.01)
-    
-    # Example with salt and pepper noise
-    # process_obj_with_noise(input_file, output_file,
-    #                       noise_type='salt_pepper',
-    #                       noise_ratio=0.05,
-    #                       displacement=0.1)
-    
-    # Example with structured noise
-    # process_obj_with_noise(input_file, output_file,
-    #                       noise_type='structured',
-    #                       frequency=5,
-    #                       amplitude=0.01)
-    
-    # Example with clustered noise
-    # process_obj_with_noise(input_file, output_file,
-    #                       noise_type='clustered',
-    #                       num_clusters=5,
-    #                       cluster_std=0.05,
-    #                       points_per_cluster=20)

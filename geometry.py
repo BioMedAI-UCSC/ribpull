@@ -145,7 +145,6 @@ def sample_mesh(s, N):
         for p in loc:
             sample.append(p)
             normals.append(n)
-    import pdb; pdb.set_trace()
     pc = 1/M * torch.tensor(np.array(sample), device=device).float()
     pc.requires_grad = True
     nc = torch.tensor(np.array(normals), device=device).float()

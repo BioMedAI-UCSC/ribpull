@@ -13,12 +13,11 @@ def convert_3d_file(input_path, output_path):
         if file_type == 'obj':
             for line in f:
                 if line.startswith('v '):  # vertex line
-                    coords = line.strip().split()[1:4]
-                    vertices.append([float(x) for x in coords])
-                elif line.startswith('vn '):  # normal line
-                    coords = line.strip().split()[1:4]
-                    normals.append([float(x) for x in coords])
-                    has_normals = True
+                    coords = line.strip().split()[1:]  # Get all values after 'v'
+                    if len(coords) == 6:  # If we have both position and normal
+                        vertices.append([float(x) for x in coords[0:3]])  # First 3 values are position
+                        normals.append([float(x) for x in coords[3:6]])  # Last 3 values are normal
+                        has_normals = True
         elif file_type == 'ply':
             # Skip header until 'end_header'
             header = True
