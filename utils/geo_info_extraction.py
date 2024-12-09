@@ -162,9 +162,17 @@ def compute_edge_lengths(vertices, simplices):
     return np.array(edge_lengths)
 
 def load_and_preprocess(obj_path):
-    mesh = trimesh.load_mesh(obj_path)
-    points = mesh.vertices
-    return points
+    """
+    Load an OBJ file and return vertices
+    """
+    vertices = []
+    with open(obj_path, 'r') as f:
+        for line in f:
+            if line.startswith('v '):
+                coords = line.split()[1:]
+                vertices.append([float(x) for x in coords])
+    raw_vertices = np.array(vertices)
+    return raw_vertices
 
 def compute_normals(points, k=10):
     # Compute normals using PCA on local neighborhoods
@@ -183,7 +191,7 @@ def compute_normals(points, k=10):
     
     return np.array(normals)
 
-def detect_discontinuities(points, normals, k=10, threshold=1.6):
+def detect_discontinuities(points, normals, k=4, threshold=1.5):
     # Find k nearest neighbors for each point
     nbrs = NearestNeighbors(n_neighbors=k).fit(points)
     _, indices = nbrs.kneighbors(points)
