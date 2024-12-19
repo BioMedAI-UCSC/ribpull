@@ -23,7 +23,8 @@ if not os.path.exists('Networks'):
 activation = "Sine"
 tv = True
 npl, dep = 64,6
-delta = 0.03
+delta = 0.005
+time_limit=100
 
 tskel = time.time()
 
@@ -34,10 +35,10 @@ if str_input.endswith('.obj'):
     pc, nc, M = sample_mesh(str_input, 100000)
 elif str_input.endswith('.xyz'):
     pc, nc = from_xyz_normals(str_input)
+    nc = -nc
     M = np.max(pc)
     
 vertices, edges, triangles, net, skpts, upts = build_neural_skeleton(pc, nc, tv=tv, activation=activation, npl=npl, dep=dep, hints=10000, delta=delta, time_limit=100)
-
 to_obj(vertices * M, str_output, lines=edges, tri=triangles)
         
 print("Skeleton computed in", '{:.2f}'.format(time.time()-tskel),"s.")
