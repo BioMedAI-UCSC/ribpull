@@ -5,6 +5,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 from sklearn.neighbors import NearestNeighbors
 from scipy.optimize import minimize
+from scipy.linalg import eigh
 import pc_processor
 
 def analyze_obj_file(file_path):
@@ -105,6 +106,125 @@ def compute_mahalanobis_distance(points1, points2):
     mahalanobis_dist = np.sqrt(np.sum(np.dot(diff, inv_cov) * diff, axis=1))
     return np.mean(mahalanobis_dist)
 
+def compute_curvature(points, k_neighbors=20):
+    """
+    Compute principal curvatures for each point in the point cloud.
+    
+    Args:
+        points (np.ndarray): Nx3 array of point coordinates
+        k_neighbors (int): Number of neighbors for local surface fitting
+        
+    Returns:
+        tuple: (principal_curvatures, principal_directions, mean_curvature, gaussian_curvature)
+    """
+    nbrs = NearestNeighbors(n_neighbors=k_neighbors).fit(points)
+    distances, indices = nbrs.kneighbors(points)
+    
+    # Arrays to store results
+    principal_curvatures = np.zeros((len(points), 2))  # k1, k2
+    principal_directions = np.zeros((len(points), 2, 3))  # Primary and secondary directions
+    mean_curvature = np.zeros(len(points))
+    gaussian_curvature = np.zeros(len(points))
+    
+    for i in range(len(points)):
+        # Get local neighborhood
+        neighborhood = points[indices[i]]
+        p = points[i]  # Center point
+        
+        # Center and scale the neighborhood
+        centered = neighborhood - p
+        scale = np.max(distances[i])
+        centered = centered / scale
+        
+        # Compute local frame using PCA
+        cov = centered.T @ centered
+        eigenvals, eigenvecs = eigh(cov)
+        
+        # Normal is eigenvector corresponding to smallest eigenvalue
+        normal = eigenvecs[:, 0]
+        
+        # Project points onto tangent plane
+        projection_matrix = np.eye(3) - normal[:, None] @ normal[None, :]
+        projected = (projection_matrix @ centered.T).T
+        
+        # Fit quadratic surface z = ax² + by² + cxy
+        x = projected[:, 0]
+        y = projected[:, 1]
+        z = centered @ normal
+        
+        X = np.column_stack([x*x, y*y, x*y])
+        coeffs = np.linalg.lstsq(X, z, rcond=None)[0]
+        
+        # Compute shape operator
+        a, b, c = coeffs
+        shape_operator = np.array([[2*a, c], 
+                                 [c, 2*b]])
+        
+        # Compute principal curvatures and directions
+        curv_vals, curv_dirs = eigh(shape_operator)
+        
+        # Store results (scaled back to original size)
+        principal_curvatures[i] = curv_vals / scale
+        mean_curvature[i] = np.mean(curv_vals) / scale
+        gaussian_curvature[i] = np.prod(curv_vals) / (scale * scale)
+        
+        # Convert principal directions back to 3D
+        for j in range(2):
+            dir_2d = curv_dirs[:, j]
+            dir_3d = (dir_2d[0] * eigenvecs[:, 1] + 
+                     dir_2d[1] * eigenvecs[:, 2])
+            principal_directions[i, j] = dir_3d
+    
+    return principal_curvatures, principal_directions, mean_curvature, gaussian_curvature
+
+def detect_subtle_changes(points, k_neighbors=20, sensitivity=2.0):
+    """
+    Detect subtle geometric changes using curvature analysis.
+    
+    Args:
+        points (np.ndarray): Nx3 array of point coordinates
+        k_neighbors (int): Number of neighbors for curvature computation
+        sensitivity (float): Number of standard deviations for threshold
+        
+    Returns:
+        tuple: (change_indices, change_scores, curvature_properties)
+    """
+    # Compute curvature properties
+    principal_curvs, _, mean_curv, gaussian_curv = compute_curvature(points, k_neighbors)
+    
+    # Compute curvature variation
+    nbrs = NearestNeighbors(n_neighbors=k_neighbors).fit(points)
+    _, indices = nbrs.kneighbors(points)
+    
+    change_scores = np.zeros(len(points))
+    
+    for i in range(len(points)):
+        neighborhood = indices[i]
+        
+        # Analyze local curvature variation
+        local_mean = mean_curv[neighborhood]
+        local_gaussian = gaussian_curv[neighborhood]
+        
+        # Compute local statistics
+        mean_variation = np.std(local_mean) / (np.abs(np.mean(local_mean)) + 1e-6)
+        gaussian_variation = np.std(local_gaussian) / (np.abs(np.mean(local_gaussian)) + 1e-6)
+        
+        # Combined score
+        change_scores[i] = mean_variation + gaussian_variation
+    
+    # Detect significant changes
+    threshold = np.mean(change_scores) + sensitivity * np.std(change_scores)
+    change_indices = np.where(change_scores > threshold)[0]
+    
+    curvature_properties = {
+        'principal_curvatures': principal_curvs,
+        'mean_curvature': mean_curv,
+        'gaussian_curvature': gaussian_curv,
+        'change_scores': change_scores
+    }
+    
+    return change_indices, change_scores, curvature_properties
+
 def fit_sphere(points, initial_radius=1.0):
     """
     Fit a sphere to a set of 3D points using nonlinear optimization.
@@ -197,8 +317,23 @@ def analyze_fractures(subject_path, reference_path, method='normals', sphere_par
             'error_threshold': 0.1
         }
     
-    # Detect fractures using selected method
-    if method == 'sphere':
+# Detect fractures using selected method
+def analyze_fractures(subject_path, reference_path, method='curvature', **params):
+    if method == 'curvature':
+        points = pc_processor.load_and_preprocess(subject_path)
+        changes, scores, properties = detect_subtle_changes(
+            points,
+            k_neighbors=params.get('k_neighbors', 20),
+            sensitivity=params.get('sensitivity', 2.0)
+        )
+        results = {
+            'method': 'curvature',
+            'discontinuity_locations': changes,
+            'discontinuity_scores': scores,
+            'curvature_properties': properties
+        }
+        return results
+    elif method == 'sphere':
         discontinuities, sphere_errors = detect_fractures_sphere(
             subject_points,
             k_neighbors=sphere_params['k_neighbors'],
@@ -229,7 +364,7 @@ def main():
     parser = argparse.ArgumentParser(description="Perform geometric analysis on an OBJ file")
     parser.add_argument("file_path", help="Path to the OBJ file")
     parser.add_argument("reference_path", help="Path to the reference OBJ file", default=None, nargs='?')
-    parser.add_argument("--method", choices=['normals', 'sphere'], default='sphere',
+    parser.add_argument("--method", choices=['normals', 'sphere'], default='curvature',
                       help="Method to use for fracture detection")
     parser.add_argument("--sphere-k", type=int, default=3,
                       help="Number of neighbors for sphere fitting")
