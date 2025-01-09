@@ -25,7 +25,7 @@ def analyze_obj_file(file_path):
     num_vertices = len(vertices)
     num_faces = len(faces)
     
-    # Compute edges (needed for correct Euler characteristic)
+    # Compute edges (will be needed for endpoint detection)
     edges = set()
     for face in faces:
         for i in range(3):
@@ -33,59 +33,14 @@ def analyze_obj_file(file_path):
             edges.add(edge)
     num_edges = len(edges)
     
-    # Compute Delaunay triangulation for additional analysis
-    tri = Delaunay(vertices)
-    edge_lengths = compute_edge_lengths(vertices, tri.simplices)
-    
-    if edge_lengths.size:
-        avg_edge_length = np.mean(edge_lengths)
-        max_edge_length = np.max(edge_lengths)
-    else:
-        avg_edge_length = 0
-        max_edge_length = 0
-    
-    # Compute correct topological properties
-    euler_characteristic = num_vertices - num_edges + num_faces
-    genus = (2 - euler_characteristic) // 2
-    
     # Construct the result dictionary
     result = {
         "Mesh Statistics": {
             "Number of Vertices": num_vertices,
             "Number of Edges": num_edges
-            },
-        "Edge Analysis": {
-            "Average Edge Length": f"{avg_edge_length:.6f}",
-            "Maximum Edge Length": f"{max_edge_length:.6f}"
-        },
-        "Topological Properties": {
-            "Euler Characteristic": euler_characteristic,
-            "Genus (number of holes)": genus
+            }
         }
-    }
     return result
-
-def compute_edge_lengths(vertices, simplices):
-    """
-    Compute the lengths of the edges in a Delaunay triangulation.
-    
-    Parameters:
-    vertices (np.ndarray): Vertex coordinates
-    simplices (np.ndarray): Delaunay simplices (triangle indices)
-    
-    Returns:
-    np.ndarray: Edge lengths
-    """
-    if not simplices.size:
-        return np.array([])
-    
-    edge_lengths = []
-    for simplex in simplices:
-        for i in range(3):
-            p1 = vertices[simplex[i]]
-            p2 = vertices[simplex[(i + 1) % 3]]
-            edge_lengths.append(np.linalg.norm(p2 - p1))
-    return np.array(edge_lengths)
 
 def compute_chamfer_distance(points1, points2):
     tree1 = cKDTree(points1)
@@ -110,12 +65,12 @@ def compute_curvature(points, k_neighbors=20):
     """
     Compute principal curvatures for each point in the point cloud.
     
-    Args:
-        points (np.ndarray): Nx3 array of point coordinates
-        k_neighbors (int): Number of neighbors for local surface fitting
+    Parameters:
+    points (np.ndarray): Nx3 array of point coordinates
+    k_neighbors (int): Number of neighbors for local surface fitting
         
     Returns:
-        tuple: (principal_curvatures, principal_directions, mean_curvature, gaussian_curvature)
+    tuple: (principal_curvatures, principal_directions, mean_curvature, gaussian_curvature)
     """
     nbrs = NearestNeighbors(n_neighbors=k_neighbors).fit(points)
     distances, indices = nbrs.kneighbors(points)
@@ -177,17 +132,17 @@ def compute_curvature(points, k_neighbors=20):
     
     return principal_curvatures, principal_directions, mean_curvature, gaussian_curvature
 
-def detect_subtle_changes(points, k_neighbors=20, sensitivity=2.0):
+def detect_subtle_changes(points, k_neighbors=5, sensitivity=2.0):
     """
     Detect subtle geometric changes using curvature analysis.
     
-    Args:
-        points (np.ndarray): Nx3 array of point coordinates
-        k_neighbors (int): Number of neighbors for curvature computation
-        sensitivity (float): Number of standard deviations for threshold
+    Parameters:
+    points (np.ndarray): Nx3 array of point coordinates
+    k_neighbors (int): Number of neighbors for curvature computation
+    sensitivity (float): Number of standard deviations for threshold
         
     Returns:
-        tuple: (change_indices, change_scores, curvature_properties)
+    tuple: (change_indices, change_scores, curvature_properties)
     """
     # Compute curvature properties
     principal_curvs, _, mean_curv, gaussian_curv = compute_curvature(points, k_neighbors)
@@ -229,12 +184,12 @@ def fit_sphere(points, initial_radius=1.0):
     """
     Fit a sphere to a set of 3D points using nonlinear optimization.
     
-    Args:
-        points (np.ndarray): Nx3 array of point coordinates
-        initial_radius (float): Initial guess for sphere radius
+    Parameters:
+    points (np.ndarray): Nx3 array of point coordinates
+    initial_radius (float): Initial guess for sphere radius
         
     Returns:
-        tuple: (center coordinates, radius, fit error)
+    tuple: (center coordinates, radius, fit error)
     """
     def objective(params):
         center = params[:3]
@@ -300,11 +255,11 @@ def analyze_fractures(subject_path, reference_path, method='normals', sphere_par
     """
     Enhanced analyze_fractures function with multiple detection methods.
     
-    Args:
-        subject_path: Path to subject point cloud
-        reference_path: Path to reference point cloud
-        method: 'normals' or 'sphere' for detection method
-        sphere_params: Dictionary with 'k_neighbors' and 'error_threshold' for sphere method
+    Parameters:
+    subject_path: Path to subject point cloud
+    reference_path: Path to reference point cloud
+    method: 'normals' or 'sphere' for detection method
+    sphere_params: Dictionary with 'k_neighbors' and 'error_threshold' for sphere method
     """
     # Load point clouds
     subject_points = pc_processor.load_and_preprocess(subject_path)
@@ -323,7 +278,7 @@ def analyze_fractures(subject_path, reference_path, method='curvature', **params
         points = pc_processor.load_and_preprocess(subject_path)
         changes, scores, properties = detect_subtle_changes(
             points,
-            k_neighbors=params.get('k_neighbors', 20),
+            k_neighbors=params.get('k_neighbors', 5),
             sensitivity=params.get('sensitivity', 2.0)
         )
         results = {
