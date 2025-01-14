@@ -8,6 +8,21 @@ from scipy.optimize import minimize
 from scipy.linalg import eigh
 import pc_processor
 
+"""
+Fracture Detection for Skeletonized Rib Cages
+
+This script analyzes 3D skeletal models (particularly rib cages) to detect potential fractures
+using three different methods:
+- Curvature analysis: Detects changes in surface curvature
+- Sphere fitting: Identifies anomalies through local sphere fitting
+- Normal-based detection: Finds discontinuities in surface normals
+
+The script accepts OBJ files as input and can compare against reference models.
+Basic usage: python script.py <input_file> [reference_file] --method [normals|sphere|curvature]
+
+Dependencies: scipy, numpy, sklearn
+"""
+
 def analyze_obj_file(file_path):
     """
     Perform geometric analysis on a 3D mesh represented by an OBJ file.

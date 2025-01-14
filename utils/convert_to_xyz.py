@@ -1,6 +1,39 @@
 import sys
 
-def convert_3d_file(input_path, output_path):
+def normalize_vertices(vertices):
+    """Normalize vertex coordinates to range [-1, 1] while preserving aspect ratio"""
+    if not vertices:
+        return vertices
+    
+    # Find min and max values for each dimension
+    x_coords = [v[0] for v in vertices]
+    y_coords = [v[1] for v in vertices]
+    z_coords = [v[2] for v in vertices]
+    
+    x_min, x_max = min(x_coords), max(x_coords)
+    y_min, y_max = min(y_coords), max(y_coords)
+    z_min, z_max = min(z_coords), max(z_coords)
+    
+    # Find the largest range to maintain aspect ratio
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    z_range = z_max - z_min
+    max_range = max(x_range, y_range, z_range)
+    
+    if max_range == 0:
+        return vertices
+    
+    # Normalize vertices
+    normalized = []
+    for vertex in vertices:
+        norm_x = 2 * (vertex[0] - x_min) / max_range - 1
+        norm_y = 2 * (vertex[1] - y_min) / max_range - 1
+        norm_z = 2 * (vertex[2] - z_min) / max_range - 1
+        normalized.append([norm_x, norm_y, norm_z])
+    
+    return normalized
+
+def convert_3d_file(input_path, output_path, normalize=True):
     vertices = []
     normals = []
     has_normals = False
@@ -48,6 +81,11 @@ def convert_3d_file(input_path, output_path):
                 elif len(values) >= 3:  # Only vertices
                     vertices.append([float(x) for x in values[0:3]])
     
+    # Normalize vertices if requested
+    if normalize:
+        vertices = normalize_vertices(vertices)
+        print("Vertices normalized to range [-1, 1]")
+    
     # Write vertices to output file in XYZ format
     with open(output_path, 'w') as f:
         if has_normals and len(vertices) == len(normals):
@@ -67,18 +105,24 @@ def convert_3d_file(input_path, output_path):
         print("No normals were found in the input file")
 
 def print_usage():
-    print("Usage: python script.py input_file output_file")
+    print("Usage: python script.py input_file output_file [--no-normalize]")
     print("Supported input formats: .obj, .ply (ASCII), .xyz")
     print("Output will be in .xyz format")
     print("Example: python script.py model.obj output.xyz")
+    print("Use --no-normalize flag to keep original coordinates")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    if len(sys.argv) < 3:
         print_usage()
         sys.exit(1)
     
     input_file = sys.argv[1]
     output_file = sys.argv[2]
+    normalize = True
+    
+    # Check for --no-normalize flag
+    if len(sys.argv) > 3 and sys.argv[3] == '--no-normalize':
+        normalize = False
     
     # Check if input file extension is supported
     supported_formats = ['obj', 'ply', 'xyz']
@@ -90,7 +134,7 @@ if __name__ == "__main__":
         sys.exit(1)
     
     try:
-        convert_3d_file(input_file, output_file)
+        convert_3d_file(input_file, output_file, normalize)
     except FileNotFoundError:
         print(f"Error: Could not find input file '{input_file}'")
         sys.exit(1)

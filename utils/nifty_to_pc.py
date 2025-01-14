@@ -58,7 +58,7 @@ def save_pointcloud_obj(points, output_path):
         for i in range(1, len(points) + 1):
             f.write(f"p {i}\n")
 
-def process_nifti_files(ct_path, seg_path, output_dir, ct_threshold=None):
+def process_nifti_files(skel_path, seg_path, output_dir, ct_threshold=None):
     """
     Process both CT and segmentation NIfTI files.
     """
@@ -66,17 +66,17 @@ def process_nifti_files(ct_path, seg_path, output_dir, ct_threshold=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Analyze intensity ranges
-    ct_stats = analyze_intensity_range(ct_path)
+    ct_stats = analyze_intensity_range(skel_path)
     
     # Workaround to get a percentage of highest values (TO BE FIXED)
     if ct_threshold is None:
         ct_threshold = ct_stats['percentiles']['95%']
     
     # Process CT data
-    ct_points = nifti_to_pointcloud(ct_path, threshold=ct_threshold)
-    if len(ct_points) > 0:
-        save_pointcloud_obj(ct_points, output_dir / 'ct_pointcloud.obj')
-        print(f"Classifier point cloud saved with {len(ct_points)} points")
+    skel_points = nifti_to_pointcloud(skel_path, threshold=ct_threshold)
+    if len(skel_points) > 0:
+        save_pointcloud_obj(skel_points, output_dir / 'cl_pointcloud.obj')
+        print(f"Classifier point cloud saved with {len(skel_points)} points")
     else:
         print(f"Warning: No points found in CT data above threshold {ct_threshold}")
     
@@ -87,15 +87,15 @@ def process_nifti_files(ct_path, seg_path, output_dir, ct_threshold=None):
     
     # Save statistics
     with open(output_dir / 'statistics.txt', 'w') as f:
-        f.write(f"CT point cloud: {len(ct_points)} points\n")
+        f.write(f"CT point cloud: {len(skel_points)} points\n")
         f.write(f"Segmentation point cloud: {len(seg_points)} points\n")
         
-        if len(ct_points) > 0:
-            ct_min = ct_points.min(axis=0)
-            ct_max = ct_points.max(axis=0)
+        if len(skel_points) > 0:
+            skel_min = skel_points.min(axis=0)
+            skel_max = skel_points.max(axis=0)
             f.write("\nCT Bounding Box:\n")
-            f.write(f"Min: {ct_min}\n")
-            f.write(f"Max: {ct_max}\n")
+            f.write(f"Min: {skel_min}\n")
+            f.write(f"Max: {skel_max}\n")
         
         if len(seg_points) > 0:
             seg_min = seg_points.min(axis=0)
@@ -106,10 +106,10 @@ def process_nifti_files(ct_path, seg_path, output_dir, ct_threshold=None):
 
 if __name__ == "__main__":
     # Replace with your file paths
-    ct_path = "RibFrac1-rib-cl.nii"
+    skel_path = "RibFrac1-rib-cl.nii"
     seg_path = "RibFrac1-rib-seg.nii"
     output_dir = "pointcloud_output"
     
     # Process the files
-    process_nifti_files(ct_path, seg_path, output_dir)
+    process_nifti_files(skel_path, seg_path, output_dir)
     
