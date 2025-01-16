@@ -1,39 +1,21 @@
 import nibabel as nib
 import numpy as np
 from pathlib import Path
+import argparse
+import json
+from datetime import datetime
 
-def analyze_intensity_range(nifti_path):
-    """
-    Analyze the intensity distribution of a NIfTI file.
-    Note: Normally Hounsfield Unit for bone is above 300, but I didn't get many points so I just set it to get a percentage of highest values
-    """
-    img = nib.load(nifti_path)
-    data = img.get_fdata()
-    
-    return {
-        'min': np.min(data),
-        'max': np.max(data),
-        'mean': np.mean(data),
-        'median': np.median(data),
-        'percentiles': {
-            '1%': np.percentile(data, 1),
-            '5%': np.percentile(data, 5),
-            '25%': np.percentile(data, 25),
-            '75%': np.percentile(data, 75),
-            '95%': np.percentile(data, 95),
-            '99%': np.percentile(data, 99)
-        }
-    }
+# Add backwards compatibility for older nibabel versions
+if not hasattr(np, 'float'):
+    np.float = float
 
-def nifti_to_pointcloud(nifti_path, threshold=0, spacing=None):
+def nifti_to_pointcloud(nifti_path, threshold=0):
     """
     Convert a NIfTI file to a point cloud.
     """
     img = nib.load(nifti_path)
     data = img.get_fdata()
-    
-    if spacing is None:
-        spacing = img.header.get_zooms()[:3]
+    spacing = img.header.get_zooms()[:3]
     
     binary_data = data > threshold
     points = np.array(np.where(binary_data)).T
@@ -45,71 +27,89 @@ def save_pointcloud_obj(points, output_path):
     """
     Save point cloud to OBJ file.
     """
-    # Ensure directory exists
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     
-    # Save as OBJ format
     with open(output_path, 'w') as f:
-        # Write vertices
         for point in points:
             f.write(f"v {point[0]:.6f} {point[1]:.6f} {point[2]:.6f}\n")
         
-        # Add points as geometry (optional but helps some viewers)
         for i in range(1, len(points) + 1):
             f.write(f"p {i}\n")
 
-def process_nifti_files(skel_path, seg_path, output_dir, ct_threshold=None):
+def process_nifti_files(input_dir, output_dir, threshold=None):
     """
-    Process both CT and segmentation NIfTI files.
+    Process all NIfTI files in the input directory.
     """
+    input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Analyze intensity ranges
-    ct_stats = analyze_intensity_range(skel_path)
+    # Find all .nii.gz files
+    nifti_files = list(input_dir.glob("*.nii.gz"))
     
-    # Workaround to get a percentage of highest values (TO BE FIXED)
-    if ct_threshold is None:
-        ct_threshold = ct_stats['percentiles']['95%']
+    if not nifti_files:
+        print("No .nii.gz files found!")
+        return
     
-    # Process CT data
-    skel_points = nifti_to_pointcloud(skel_path, threshold=ct_threshold)
-    if len(skel_points) > 0:
-        save_pointcloud_obj(skel_points, output_dir / 'cl_pointcloud.obj')
-        print(f"Classifier point cloud saved with {len(skel_points)} points")
-    else:
-        print(f"Warning: No points found in CT data above threshold {ct_threshold}")
+    print(f"Found {len(nifti_files)} NIfTI files to process")
     
-    # Process segmentation data
-    seg_points = nifti_to_pointcloud(seg_path, threshold=0.5)
-    save_pointcloud_obj(seg_points, output_dir / 'seg_pointcloud.obj')
-    print(f"Segmentation point cloud saved with {len(seg_points)} points")
+    # Prepare summary dictionary
+    summary = {
+        'processed_on': datetime.now().isoformat(),
+        'input_directory': str(input_dir),
+        'output_directory': str(output_dir),
+        'processed_files': {}
+    }
     
-    # Save statistics
-    with open(output_dir / 'statistics.txt', 'w') as f:
-        f.write(f"CT point cloud: {len(skel_points)} points\n")
-        f.write(f"Segmentation point cloud: {len(seg_points)} points\n")
+    # Process each file
+    for nifti_file in nifti_files:
+        print(f"\nProcessing {nifti_file.name}")
         
-        if len(skel_points) > 0:
-            skel_min = skel_points.min(axis=0)
-            skel_max = skel_points.max(axis=0)
-            f.write("\nCT Bounding Box:\n")
-            f.write(f"Min: {skel_min}\n")
-            f.write(f"Max: {skel_max}\n")
-        
-        if len(seg_points) > 0:
-            seg_min = seg_points.min(axis=0)
-            seg_max = seg_points.max(axis=0)
-            f.write("\nSegmentation Bounding Box:\n")
-            f.write(f"Min: {seg_min}\n")
-            f.write(f"Max: {seg_max}\n")
+        try:
+            # Convert to point cloud
+            points = nifti_to_pointcloud(nifti_file, threshold=threshold)
+            
+            # Create output filename
+            output_file = output_dir / f"{nifti_file.stem.replace('.nii', '')}_pointcloud.obj"
+            
+            # Save point cloud
+            save_pointcloud_obj(points, output_file)
+            print(f"Point cloud saved with {len(points)} points")
+            
+            # Collect statistics
+            stats = {
+                'points': len(points),
+                'threshold_used': float(threshold) if threshold is not None else 0
+            }
+            
+            if len(points) > 0:
+                stats['bounds'] = {
+                    'min': points.min(axis=0).tolist(),
+                    'max': points.max(axis=0).tolist()
+                }
+            
+            # Add to summary
+            summary['processed_files'][nifti_file.name] = stats
+            
+        except Exception as e:
+            print(f"Error processing {nifti_file.name}: {str(e)}")
+            summary['processed_files'][nifti_file.name] = {'error': str(e)}
+    
+    # Save summary
+    with open(output_dir / 'conversion_summary.json', 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    print(f"\nProcessing complete. Summary saved to: {output_dir / 'conversion_summary.json'}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Convert NIfTI files to point cloud OBJ files")
+    parser.add_argument("input_dir", help="Directory containing .nii.gz files")
+    parser.add_argument("output_dir", help="Directory for output files")
+    parser.add_argument("--threshold", type=float, help="Optional: threshold value (default: 0)", default=0)
+    
+    args = parser.parse_args()
+    process_nifti_files(args.input_dir, args.output_dir, args.threshold)
 
 if __name__ == "__main__":
-    # Replace with your file paths
-    skel_path = "RibFrac1-rib-cl.nii"
-    seg_path = "RibFrac1-rib-seg.nii"
-    output_dir = "pointcloud_output"
-    
-    # Process the files
-    process_nifti_files(skel_path, seg_path, output_dir)
+    main()
     
