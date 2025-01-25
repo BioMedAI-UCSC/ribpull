@@ -24,7 +24,7 @@ python utils/convert_to_xyz.py "$VISUALIZATION_PLY_DIR" "$XYZ_NORMAL_DIR"
 
 echo "For each XYZ file, run Neural Skeleton to extract skeleton as OBJ file..."
 
-# Iterate through all XYZ files in the XYZ_NORMAL_DIR
+# Step 3: Iterate through all XYZ files in the XYZ_NORMAL_DIR
 for xyz_file in "$XYZ_NORMAL_DIR"/*.xyz; do
     # Check if the file exists
     if [ -f "$xyz_file" ]; then
