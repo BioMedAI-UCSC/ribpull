@@ -1,6 +1,7 @@
 import numpy as np
 import os
 from pathlib import Path
+import argparse
 
 def convert_to_ply(points, output_file, color):
     """Helper function to write a PLY file with specified color"""
@@ -72,10 +73,13 @@ def process_directories(point_dir, label_dir, output_dir):
             print(f"Error processing {base_name}: {str(e)}")
 
 if __name__ == "__main__":
-    # Example usage with your actual paths
-    point_dir = "../test/inference_res/point"
-    label_dir = "../test/inference_res/label"
-    output_dir = "../test/visualization_ply"
+    parser = argparse.ArgumentParser(description='Splits point cloud into background and foreground')
+    parser.add_argument('input_dir', help='Input directory containing output of ribseg')
+    parser.add_argument('output_dir', help='Output directory for processed files')
+    args = parser.parse_args()
+    point_dir = args.input_dir + "/point/"
+    label_dir = args.input_dir + "/label/"
+    output_dir = args.output_dir
     
     process_directories(point_dir, label_dir, output_dir)
     print("Processing complete!")
