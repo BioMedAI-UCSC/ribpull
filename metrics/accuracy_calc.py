@@ -5,6 +5,7 @@ import os
 def parse_endpoint_file(file_path):
     """Parse the endpoint text file and extract endpoint counts for each skeleton."""
     endpoint_data = {}
+    skeleton_data = {}
     current_file = None
     
     with open(file_path, 'r') as f:
@@ -16,19 +17,25 @@ def parse_endpoint_file(file_path):
             if file_match:
                 current_file = file_match.group(1)
                 endpoint_data[current_file] = []
+                skeleton_data[current_file] = []
                 continue
             
             # Check for skeleton endpoint counts
             endpoint_match = re.match(r'Skeleton \d+: (\d+) endpoints', line)
             if endpoint_match and current_file:
                 endpoint_data[current_file].append(int(endpoint_match.group(1)))
+
+            # Get total number of skeletons
+            skeleton_count_match = re.match(r'Number of skeletons: (\d+)', line)
+            if skeleton_count_match and current_file:
+                skeleton_data[current_file] = int(skeleton_count_match.group(1))
     
-    return endpoint_data
+    return endpoint_data, skeleton_data
 
 def analyze_fracture_endpoints(endpoint_file, csv_file):
     """Compare endpoint counts with fracture labels from CSV."""
     # Parse endpoint data
-    endpoint_data = parse_endpoint_file(endpoint_file)
+    endpoint_data, skeleton_data = parse_endpoint_file(endpoint_file)
     
     # Read CSV file with explicit delimiter
     df = pd.read_csv(csv_file)    
@@ -52,10 +59,13 @@ def analyze_fracture_endpoints(endpoint_file, csv_file):
         # Count total non-zero endpoints
         total_endpoints = sum(1 for ep in endpoints if ep > 0)
         
+        # Get total skeletons
+        total_skeletons = skeleton_data[filename]
+        
         results[filename] = {
             'total_fractures': total_fractures,
             'total_endpoints': total_endpoints,
-            #'total_skeletons': data['total_skeletons'],
+            'total_skeletons': total_skeletons,
             'match': total_fractures == total_endpoints
         }
     
@@ -78,7 +88,7 @@ def main():
             print(f"File: {filename}")
             print(f"  Total Fractures: {result['total_fractures']}")
             print(f"  Total Endpoints: {result['total_endpoints']}")
-            #print(f"  Total Skeletons: {result['total_skeletons']}")
+            print(f"  Total Skeletons: {result['total_skeletons']}")
             print(f"  Match: {'Yes' if result['match'] else 'No'}")
             print()
     
