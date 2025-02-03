@@ -12,6 +12,20 @@ def load_skeleton_obj(file_path):
     mesh = trimesh.load_mesh(file_path)
     return np.array(mesh.vertices)
 
+def load_skeleton_xyz(file_path):
+    """Load skeleton points from XYZ file (assumes space-separated X, Y, Z)."""
+    return np.loadtxt(file_path, delimiter=' ')
+
+def load_skeleton_file(file_path):
+    """Load skeleton points from either OBJ or XYZ."""
+    extension = Path(file_path).suffix.lower()
+    if extension == ".obj":
+        return load_skeleton_obj(file_path)
+    elif extension == ".xyz":
+        return load_skeleton_xyz(file_path)
+    else:
+        raise ValueError(f"Unsupported file format: {extension}")
+    
 def create_sphere_marker(center, radius, resolution=10):
     """Create vertices and faces for a sphere marker."""
     # Create a unit sphere
@@ -47,6 +61,7 @@ def construct_radius_connectivity(points, radius=None):
         tree = cKDTree(points)
         distances, _ = tree.query(points, k=2)
         radius = np.mean(distances[:, 1]) * 2.4
+    print (f"Using radius: {radius}")
     
     tree = cKDTree(points)
     pairs = list(tree.query_pairs(radius))
@@ -124,9 +139,9 @@ def create_visualization_obj(points, edges, component_endpoints, output_file, ma
         for face in all_faces:
             f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
 
-def analyze_and_visualize_skeleton(input_obj, output_obj, radius=None):
+def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
     """Main function to analyze skeleton and create visualization."""
-    points = load_skeleton_obj(input_obj)
+    points = load_skeleton_file(input_file)
     edges, used_radius = construct_radius_connectivity(points, radius)
     n_components, component_labels = identify_separate_skeletons(
         points, edges, len(points)
@@ -139,7 +154,7 @@ def analyze_and_visualize_skeleton(input_obj, output_obj, radius=None):
     return n_components, component_endpoints
 
 def process_directory(directory_path, radius=None):
-    """Process all OBJ files in the given directory."""
+    """Process all OBJ and XYZ files in the given directory."""
     directory = Path(directory_path)
     results = {}
     
@@ -147,35 +162,35 @@ def process_directory(directory_path, radius=None):
     output_dir = directory / "endpoint_analysis"
     output_dir.mkdir(exist_ok=True)
     
-    # Find all OBJ files
-    obj_files = list(directory.glob("*.obj"))
-    if not obj_files:
-        print(f"No OBJ files found in {directory}")
+    # Find all OBJ and XYZ files
+    skeleton_files = list(directory.glob("*.obj")) + list(directory.glob("*.xyz"))
+    if not skeleton_files:
+        print(f"No OBJ or XYZ files found in {directory}")
         return
     
-    print(f"Found {len(obj_files)} OBJ files to process")
+    print(f"Found {len(skeleton_files)} files to process")
     
     # Process each file
-    for obj_file in obj_files:
+    for file in skeleton_files:
         # Skip files that already have _endpoints suffix
-        if obj_file.stem.endswith("_endpoints"):
+        if file.stem.endswith("_endpoints"):
             continue
             
-        print(f"\nProcessing: {obj_file.name}")
+        print(f"\nProcessing: {file.name}")
         
-        # Create output path
-        output_file = output_dir / f"{obj_file.stem}_endpoints.obj"
+        # Create output path (always save as OBJ)
+        output_file = output_dir / f"{file.stem}_endpoints.obj"
         
         try:
             # Process the file
             n_components, component_endpoints = analyze_and_visualize_skeleton(
-                str(obj_file), 
+                str(file), 
                 str(output_file), 
                 radius
             )
             
             # Store results
-            results[obj_file.name] = {
+            results[file.name] = {
                 'n_components': n_components,
                 'endpoints_per_component': {comp: len(endpoints) 
                                          for comp, endpoints in component_endpoints.items()}
@@ -187,7 +202,7 @@ def process_directory(directory_path, radius=None):
             print(f"Visualization saved to: {output_file}")
             
         except Exception as e:
-            print(f"Error processing {obj_file.name}: {str(e)}")
+            print(f"Error processing {file.name}: {str(e)}")
             continue
     
     # Write summary report
@@ -204,7 +219,7 @@ def process_directory(directory_path, radius=None):
             f.write("\n")
     
     print(f"\nAnalysis complete. Summary report saved to: {report_path}")
-
+    
 def main():
     parser = argparse.ArgumentParser(description="Perform geometric analysis on OBJ files in a directory")
     parser.add_argument("directory_path", help="Path to the directory containing OBJ files")
