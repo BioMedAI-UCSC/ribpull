@@ -59,8 +59,8 @@ def construct_radius_connectivity(points, radius=None):
     """Construct connectivity graph using radius-based neighbor search."""
     if radius is None:
         tree = cKDTree(points)
-        distances, _ = tree.query(points, k=2)
-        radius = np.mean(distances[:, 1]) * 2.4
+        distances, _ = tree.query(points, k=3)
+        radius = np.mean(distances[:, 1]) * 2.45
     print (f"Using radius: {radius}")
     
     tree = cKDTree(points)
@@ -68,6 +68,44 @@ def construct_radius_connectivity(points, radius=None):
     edges = np.array(pairs) if pairs else np.zeros((0, 2), dtype=int)
     
     return edges, radius
+
+def detect_endpoints_by_density(points, box_size=None):
+    """
+    Detect endpoints by counting points within a local box neighborhood.
+    
+    Parameters:
+    points (np.ndarray): Nx3 array of 3D point coordinates
+    box_size (float): Size of the box neighborhood. If None, will be computed from point cloud
+    threshold (int): Minimum number of points to not be considered an endpoint
+    
+    Returns:
+    np.ndarray: Boolean mask indicating endpoint vertices
+    """
+    if box_size is None:
+        # Compute box size based on point cloud characteristics
+        bbox = np.ptp(points, axis=0)  # Get range of points in each dimension
+        box_size = np.mean(bbox) * 0.047  # Use 10% of mean bbox size
+    
+    tree = cKDTree(points)
+    endpoint_mask = np.zeros(len(points), dtype=bool)
+    
+    # For each point, count neighbors within box_size
+    for i in range(len(points)):
+        query_point = points[i]
+        
+        # Define box bounds
+        box_min = query_point - box_size/2
+        box_max = query_point + box_size/2
+        
+        # Find points within box
+        indices = tree.query_ball_point(query_point, box_size/2)
+        n_neighbors = len(indices)
+        
+        # If fewer than threshold neighbors, mark as endpoint
+        if n_neighbors < 10:  # You can adjust this threshold
+            endpoint_mask[i] = True
+            
+    return endpoint_mask
 
 def identify_separate_skeletons(points, edges, n_points):
     """Identify separate skeleton components in the point cloud."""
@@ -143,15 +181,37 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
     """Main function to analyze skeleton and create visualization."""
     points = load_skeleton_file(input_file)
     edges, used_radius = construct_radius_connectivity(points, radius)
+    
+    # Get component information
     n_components, component_labels = identify_separate_skeletons(
         points, edges, len(points)
     )
-    component_endpoints, connections = find_endpoints_per_skeleton(
+    
+    # Get endpoints from connectivity analysis
+    connectivity_endpoints, connections = find_endpoints_per_skeleton(
         edges, len(points), component_labels
     )
-    create_visualization_obj(points, edges, component_endpoints, output_obj)
     
-    return n_components, component_endpoints
+    # Get endpoints from density analysis
+    density_endpoints = detect_endpoints_by_density(points)
+    
+    # Combine both methods while preserving component structure
+    combined_endpoints = {}
+    for component in range(n_components):
+        # Get points belonging to this component
+        component_mask = (component_labels == component)
+        component_points = np.where(component_mask)[0]
+        
+        # Find endpoints for this component using both methods
+        connectivity_ends = set(connectivity_endpoints.get(component, []))
+        density_ends = set(component_points[density_endpoints[component_mask]])
+        
+        # Combine endpoints for this component
+        combined_endpoints[component] = np.array(list(connectivity_ends.union(density_ends)))
+    
+    create_visualization_obj(points, edges, combined_endpoints, output_obj)
+    
+    return n_components, combined_endpoints
 
 def process_directory(directory_path, radius=None):
     """Process all OBJ and XYZ files in the given directory."""
@@ -230,4 +290,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
