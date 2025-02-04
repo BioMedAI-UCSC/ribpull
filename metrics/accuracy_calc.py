@@ -1,6 +1,7 @@
 import pandas as pd
 import re
 import os
+import matplotlib.pyplot as plt
 
 def parse_endpoint_file(file_path):
     """Parse the endpoint text file and extract endpoint counts for each skeleton."""
@@ -37,7 +38,7 @@ def analyze_fracture_endpoints(endpoint_file, csv_file):
     # Parse endpoint data
     endpoint_data, skeleton_data = parse_endpoint_file(endpoint_file)
     
-    # Read CSV file with explicit delimiter
+    # Read CSV file
     df = pd.read_csv(csv_file)    
     
     results = {}
@@ -51,8 +52,6 @@ def analyze_fracture_endpoints(endpoint_file, csv_file):
         # Find the corresponding rib scan
         file_row = df[df['public_id'] == ribfrac_id].iloc[0]
         
-        #import pdb; pdb.set_trace()
-        
         # Count total unique label codes (excluding 0)
         total_fractures = len(df[df['public_id'] == ribfrac_id][df['label_code'] != 0])
         
@@ -62,15 +61,40 @@ def analyze_fracture_endpoints(endpoint_file, csv_file):
         # Get total skeletons
         total_skeletons = skeleton_data[filename]
         
+        # Compute ratio, avoiding division by zero
+        ratio = (total_fractures / (total_endpoints - 24)) * 100 if (total_endpoints - 24) != 0 else 0
+        
         results[filename] = {
             'total_fractures': total_fractures,
             'total_endpoints': total_endpoints,
             'total_skeletons': total_skeletons,
-            'match': total_fractures == total_endpoints
+            'match': total_fractures == total_endpoints,
+            'ratio': ratio
         }
     
     return results
 
+def plot_results(results):
+    """Generates and saves a bar plot of the fracture-to-endpoint ratio."""
+    # Extract and sort data
+    ribcage_data = sorted(results.items(), key=lambda x: int(re.search(r'\d+', x[0]).group()))
+    
+    ribcages = [re.search(r'RibFrac\d+', name).group() for name, _ in ribcage_data]
+    ratios = [data['ratio'] for _, data in ribcage_data]
+
+    # Create bar plot
+    plt.figure(figsize=(12, 6))
+    plt.bar(ribcages, ratios, color='skyblue')
+    plt.xticks(rotation=45, ha='right')
+    plt.ylabel("Ratio of GT Fractures vs. Detected Endpoints")
+    plt.xlabel("Ribcage Files")
+    plt.title("Fracture Endpoint Analysis (Sorted)")
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+    # Save the plot
+    plt.savefig("results.png")
+    plt.show()
+    print("Plot saved as 'results.png'.")
 
 def main():
     # Paths to your files - modify these as needed
@@ -90,7 +114,11 @@ def main():
             print(f"  Total Endpoints: {result['total_endpoints']}")
             print(f"  Total Skeletons: {result['total_skeletons']}")
             print(f"  Match: {'Yes' if result['match'] else 'No'}")
+            print(f"  Ratio of GT Fractures vs. Detected Endpoints: {result['ratio']:.2f}")
             print()
+        
+        # Generate and save the plot
+        plot_results(comparison_results)
     
     except FileNotFoundError as e:
         print(f"Error: {e}")
@@ -100,4 +128,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
