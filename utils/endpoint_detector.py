@@ -4,16 +4,13 @@ import trimesh
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 import argparse
-import os
 from pathlib import Path
 
 def load_skeleton_obj(file_path):
-    """Load skeleton points from OBJ file."""
     mesh = trimesh.load_mesh(file_path)
     return np.array(mesh.vertices)
 
-def load_skeleton_xyz(file_path):
-    """Load skeleton points from XYZ file (assumes space-separated X, Y, Z)."""
+def load_skeleton_xyz(file_path): #assumes space-separated X, Y, Z
     return np.loadtxt(file_path, delimiter=' ')
 
 def load_skeleton_file(file_path):
@@ -38,10 +35,8 @@ def create_sphere_marker(center, radius, resolution=10):
     y = radius * np.sin(theta) * np.sin(phi) + center[1]
     z = radius * np.cos(theta) + center[2]
 
-    # Create vertices
+    # Create vertices & faces
     vertices = np.vstack((x.flatten(), y.flatten(), z.flatten())).T
-
-    # Create faces
     faces = []
     for i in range(resolution-1):
         for j in range(resolution-1):
@@ -54,6 +49,33 @@ def create_sphere_marker(center, radius, resolution=10):
             faces.append([v1, v3, v2])
 
     return vertices, np.array(faces)
+
+def detect_by_edge_similarity(points, edges):
+    """
+    Detect endpoints by finding points with small angles between edges (indicating
+    edges in similar directions) versus points with angles close to 180° (indicating
+    opposite directions).
+    """
+    endpoint_mask = np.zeros(len(points), dtype=bool)
+    for i in range(len(points)):
+        connected_edges = edges[np.any(edges == i, axis=1)]
+        if len(connected_edges) < 2:
+            continue
+        connected_verts = np.unique(connected_edges[connected_edges != i])
+        edge_vectors = points[connected_verts] - points[i]
+        edge_vectors = edge_vectors / np.linalg.norm(edge_vectors, axis=1)[:, np.newaxis]
+        # Check if all angles are less than 36 degrees (cos > 0.809)
+        is_endpoint = True
+        for j in range(len(edge_vectors)):
+            for k in range(j+1, len(edge_vectors)):
+                cos_angle = abs(np.dot(edge_vectors[j], edge_vectors[k]))
+                if cos_angle < np.cos(np.radians(18)):  # angle > 18 degrees
+                    is_endpoint = False
+                    break
+            if not is_endpoint:
+                break    
+        endpoint_mask[i] = is_endpoint
+    return endpoint_mask
 
 def construct_radius_connectivity(points, radius=None):
     """Construct connectivity graph using radius-based neighbor search."""
@@ -70,17 +92,7 @@ def construct_radius_connectivity(points, radius=None):
     return edges, radius
 
 def detect_endpoints_by_density(points, box_size=None):
-    """
-    Detect endpoints by counting points within a local box neighborhood.
-    
-    Parameters:
-    points (np.ndarray): Nx3 array of 3D point coordinates
-    box_size (float): Size of the box neighborhood. If None, will be computed from point cloud
-    threshold (int): Minimum number of points to not be considered an endpoint
-    
-    Returns:
-    np.ndarray: Boolean mask indicating endpoint vertices
-    """
+    """Detect endpoints by counting points within a local box neighborhood."""
     if box_size is None:
         # Compute box size based on point cloud characteristics
         bbox = np.ptp(points, axis=0)  # Get range of points in each dimension
@@ -178,7 +190,6 @@ def create_visualization_obj(points, edges, component_endpoints, output_file, ma
             f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
 
 def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
-    """Main function to analyze skeleton and create visualization."""
     points = load_skeleton_file(input_file)
     edges, used_radius = construct_radius_connectivity(points, radius)
     
@@ -187,27 +198,28 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
         points, edges, len(points)
     )
     
-    # Get endpoints from connectivity analysis
+    # Get endpoints from all three methods
     connectivity_endpoints, connections = find_endpoints_per_skeleton(
         edges, len(points), component_labels
     )
-    
-    # Get endpoints from density analysis
     density_endpoints = detect_endpoints_by_density(points)
+    edge_similarity_endpoints = detect_by_edge_similarity(points, edges)
     
-    # Combine both methods while preserving component structure
+    # Combine all three methods while preserving component structure
     combined_endpoints = {}
     for component in range(n_components):
-        # Get points belonging to this component
         component_mask = (component_labels == component)
         component_points = np.where(component_mask)[0]
         
-        # Find endpoints for this component using both methods
+        # Find endpoints using all three methods
         connectivity_ends = set(connectivity_endpoints.get(component, []))
         density_ends = set(component_points[density_endpoints[component_mask]])
+        similarity_ends = set(component_points[edge_similarity_endpoints[component_mask]])
         
         # Combine endpoints for this component
-        combined_endpoints[component] = np.array(list(connectivity_ends.union(density_ends)))
+        combined_endpoints[component] = np.array(list(
+            connectivity_ends.union(density_ends).union(similarity_ends)
+        ))
     
     create_visualization_obj(points, edges, combined_endpoints, output_obj)
     
@@ -235,18 +247,14 @@ def process_directory(directory_path, radius=None):
         # Skip files that already have _endpoints suffix
         if file.stem.endswith("_endpoints"):
             continue
-            
         print(f"\nProcessing: {file.name}")
-        
         # Create output path (always save as OBJ)
         output_file = output_dir / f"{file.stem}_endpoints.obj"
         
         try:
             # Process the file
             n_components, component_endpoints = analyze_and_visualize_skeleton(
-                str(file), 
-                str(output_file), 
-                radius
+                str(file), str(output_file), radius
             )
             
             # Store results
@@ -284,7 +292,6 @@ def main():
     parser = argparse.ArgumentParser(description="Perform geometric analysis on OBJ files in a directory")
     parser.add_argument("directory_path", help="Path to the directory containing OBJ files")
     parser.add_argument("--radius", type=float, help="Optional: Specify connectivity radius", default=None)
-    
     args = parser.parse_args()
     process_directory(args.directory_path, args.radius)
 
