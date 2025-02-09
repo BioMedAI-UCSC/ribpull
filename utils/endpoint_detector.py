@@ -57,6 +57,7 @@ def detect_by_edge_similarity(points, edges):
     opposite directions).
     """
     endpoint_mask = np.zeros(len(points), dtype=bool)
+    angle_threshold = 100  # Threshold for angle similarity (in degrees)
     for i in range(len(points)):
         connected_edges = edges[np.any(edges == i, axis=1)]
         if len(connected_edges) < 2:
@@ -64,16 +65,15 @@ def detect_by_edge_similarity(points, edges):
         connected_verts = np.unique(connected_edges[connected_edges != i])
         edge_vectors = points[connected_verts] - points[i]
         edge_vectors = edge_vectors / np.linalg.norm(edge_vectors, axis=1)[:, np.newaxis]
-        # Check if all angles are less than 36 degrees (cos > 0.809)
         is_endpoint = True
         for j in range(len(edge_vectors)):
             for k in range(j+1, len(edge_vectors)):
-                cos_angle = abs(np.dot(edge_vectors[j], edge_vectors[k]))
-                if cos_angle < np.cos(np.radians(18)):  # angle > 18 degrees
+                cos_angle = np.dot(edge_vectors[j], edge_vectors[k])
+                if cos_angle < np.cos(np.radians(angle_threshold)):  
                     is_endpoint = False
                     break
             if not is_endpoint:
-                break    
+                break
         endpoint_mask[i] = is_endpoint
     return endpoint_mask
 
@@ -96,7 +96,7 @@ def detect_endpoints_by_density(points, box_size=None):
     if box_size is None:
         # Compute box size based on point cloud characteristics
         bbox = np.ptp(points, axis=0)  # Get range of points in each dimension
-        box_size = np.mean(bbox) * 0.047  # Use 10% of mean bbox size
+        box_size = np.mean(bbox) * 0.05
     
     tree = cKDTree(points)
     endpoint_mask = np.zeros(len(points), dtype=bool)
@@ -114,7 +114,7 @@ def detect_endpoints_by_density(points, box_size=None):
         n_neighbors = len(indices)
         
         # If fewer than threshold neighbors, mark as endpoint
-        if n_neighbors < 10:  # You can adjust this threshold
+        if n_neighbors < 6:  # You can adjust this threshold
             endpoint_mask[i] = True
             
     return endpoint_mask
@@ -154,8 +154,8 @@ def find_endpoints_per_skeleton(edges, n_points, component_labels):
     
     return component_endpoints, connections
 
-def create_visualization_obj(points, edges, component_endpoints, output_file, marker_radius=None):
-    """Create OBJ file with skeleton and endpoint markers."""
+def create_visualization_obj(points, edges, endpoint_info, output_file, marker_radius=None, blend_colors=False):
+    """Modified to handle endpoints detected by multiple methods."""
     if marker_radius is None:
         if len(edges) > 0:
             edge_lengths = np.linalg.norm(points[edges[:, 0]] - points[edges[:, 1]], axis=1)
@@ -164,64 +164,145 @@ def create_visualization_obj(points, edges, component_endpoints, output_file, ma
             bbox_size = np.ptp(points, axis=0)
             marker_radius = np.mean(bbox_size) * 0.02
 
+    colors = {
+        'connectivity': [255, 0, 0],    # Red
+        'density': [0, 255, 0],         # Green
+        'edge_similarity': [0, 0, 255]  # Blue
+    }
+
+    # Priority order for methods (if not blending)
+    method_priority = ['connectivity', 'density', 'edge_similarity']
+
     all_vertices = points.tolist()
+    all_vertex_colors = [[128, 128, 128] for _ in range(len(points))]  # Default gray
     all_faces = []
     vertex_offset = len(all_vertices)
 
-    for component, endpoints in component_endpoints.items():
-        for endpoint in endpoints:
-            sphere_verts, sphere_faces = create_sphere_marker(
-                points[endpoint], 
-                marker_radius
-            )
-            
-            all_vertices.extend(sphere_verts.tolist())
-            all_faces.extend((sphere_faces + vertex_offset).tolist())
-            vertex_offset += len(sphere_verts)
+    # First, collect all methods for each endpoint
+    endpoint_methods = {}
+    for component, endpoints_data in endpoint_info.items():
+        for endpoint, method in endpoints_data:
+            if endpoint not in endpoint_methods:
+                endpoint_methods[endpoint] = set()
+            endpoint_methods[endpoint].add(method)
 
+    # Process each endpoint
+    for component, endpoints_data in endpoint_info.items():
+        for endpoint, _ in endpoints_data:
+            if endpoint in endpoint_methods:  # Check if we haven't processed this endpoint yet
+                methods = endpoint_methods[endpoint]
+                
+                if blend_colors and len(methods) > 1:
+                    # Blend colors of all methods that detected this endpoint
+                    color = [0, 0, 0]
+                    for method in methods:
+                        method_color = colors[method]
+                        color = [c1 + c2 for c1, c2 in zip(color, method_color)]
+                    # Average the colors
+                    color = [min(255, c // len(methods)) for c in color]
+                else:
+                    # Use the highest priority method's color
+                    for method in method_priority:
+                        if method in methods:
+                            color = colors[method]
+                            break
+                    else:
+                        color = colors[list(methods)[0]]  # Fallback to first method if none in priority
+
+                sphere_verts, sphere_faces = create_sphere_marker(
+                    points[endpoint], 
+                    marker_radius
+                )
+                
+                # Add vertices and their colors
+                all_vertices.extend(sphere_verts.tolist())
+                all_vertex_colors.extend([color for _ in range(len(sphere_verts))])
+                
+                all_faces.extend((sphere_faces + vertex_offset).tolist())
+                vertex_offset += len(sphere_verts)
+                
+                # Remove this endpoint from our tracking dict to avoid processing it again
+                del endpoint_methods[endpoint]
+
+    # Write PLY file
     with open(output_file, 'w') as f:
-        for v in all_vertices:
-            f.write(f"v {v[0]} {v[1]} {v[2]}\n")
+        # Header
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write(f"element vertex {len(all_vertices)}\n")
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
+        f.write(f"element face {len(all_faces)}\n")
+        f.write("property list uchar int vertex_indices\n")
+        f.write("element edge {len(edges)}\n")
+        f.write("property int vertex1\n")
+        f.write("property int vertex2\n")
+        f.write("end_header\n")
+
+        # Vertices with colors
+        for vertex, color in zip(all_vertices, all_vertex_colors):
+            f.write(f"{vertex[0]} {vertex[1]} {vertex[2]} {color[0]} {color[1]} {color[2]}\n")
         
-        for edge in edges:
-            f.write(f"l {edge[0]+1} {edge[1]+1}\n")
-        
+        # Faces
         for face in all_faces:
-            f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
+            f.write(f"3 {face[0]} {face[1]} {face[2]}\n")
+
+        # Edges
+        for edge in edges:
+            f.write(f"{edge[0]} {edge[1]}\n")
 
 def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
     points = load_skeleton_file(input_file)
     edges, used_radius = construct_radius_connectivity(points, radius)
     
-    # Get component information
-    n_components, component_labels = identify_separate_skeletons(
-        points, edges, len(points)
-    )
+    n_components, component_labels = identify_separate_skeletons(points, edges, len(points))
     
-    # Get endpoints from all three methods
-    connectivity_endpoints, connections = find_endpoints_per_skeleton(
-        edges, len(points), component_labels
-    )
+    # Get endpoints from all methods
+    connectivity_endpoints, connections = find_endpoints_per_skeleton(edges, len(points), component_labels)
     density_endpoints = detect_endpoints_by_density(points)
     edge_similarity_endpoints = detect_by_edge_similarity(points, edges)
     
-    # Combine all three methods while preserving component structure
+    # Track detection counts
+    method_counts = {
+        'connectivity': 0,
+        'density': 0,
+        'edge_similarity': 0
+    }
+    
     combined_endpoints = {}
     for component in range(n_components):
         component_mask = (component_labels == component)
         component_points = np.where(component_mask)[0]
         
-        # Find endpoints using all three methods
-        connectivity_ends = set(connectivity_endpoints.get(component, []))
-        density_ends = set(component_points[density_endpoints[component_mask]])
-        similarity_ends = set(component_points[edge_similarity_endpoints[component_mask]])
+        endpoints_with_method = []
+        processed_points = set()
         
-        # Combine endpoints for this component
-        combined_endpoints[component] = np.array(list(
-            connectivity_ends.union(density_ends).union(similarity_ends)
-        ))
+        # Process methods in priority order
+        methods = [
+            ('connectivity', connectivity_endpoints.get(component, [])),
+            ('density', component_points[density_endpoints[component_mask]]),
+            ('edge_similarity', component_points[edge_similarity_endpoints[component_mask]])
+        ]
+        
+        for method_name, method_endpoints in methods:
+            for endpoint in method_endpoints:
+                if endpoint not in processed_points:
+                    endpoints_with_method.append((endpoint, method_name))
+                    processed_points.add(endpoint)
+                method_counts[method_name] += 1
+        
+        combined_endpoints[component] = endpoints_with_method
     
     create_visualization_obj(points, edges, combined_endpoints, output_obj)
+    
+    # Print detection counts
+    print("\nEndpoint Detection Counts:")
+    for method, count in method_counts.items():
+        print(f"{method}: {count} endpoints")
     
     return n_components, combined_endpoints
 
@@ -249,7 +330,7 @@ def process_directory(directory_path, radius=None):
             continue
         print(f"\nProcessing: {file.name}")
         # Create output path (always save as OBJ)
-        output_file = output_dir / f"{file.stem}_endpoints.obj"
+        output_file = output_dir / f"{file.stem}_endpoints.ply"
         
         try:
             # Process the file
