@@ -1,55 +1,12 @@
 import numpy as np
 from scipy.spatial import cKDTree
-import trimesh
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 import argparse
 from pathlib import Path
-
-def load_skeleton_obj(file_path):
-    mesh = trimesh.load_mesh(file_path)
-    return np.array(mesh.vertices)
-
-def load_skeleton_xyz(file_path): #assumes space-separated X, Y, Z
-    return np.loadtxt(file_path, delimiter=' ')
-
-def load_skeleton_file(file_path):
-    """Load skeleton points from either OBJ or XYZ."""
-    extension = Path(file_path).suffix.lower()
-    if extension == ".obj":
-        return load_skeleton_obj(file_path)
-    elif extension == ".xyz":
-        return load_skeleton_xyz(file_path)
-    else:
-        raise ValueError(f"Unsupported file format: {extension}")
+import pc_processor as pc
     
-def create_sphere_marker(center, radius, resolution=10):
-    """Create vertices and faces for a sphere marker."""
-    # Create a unit sphere
-    phi = np.linspace(0, 2*np.pi, resolution)
-    theta = np.linspace(0, np.pi, resolution)
-    phi, theta = np.meshgrid(phi, theta)
-
-    # Convert to Cartesian coordinates
-    x = radius * np.sin(theta) * np.cos(phi) + center[0]
-    y = radius * np.sin(theta) * np.sin(phi) + center[1]
-    z = radius * np.cos(theta) + center[2]
-
-    # Create vertices & faces
-    vertices = np.vstack((x.flatten(), y.flatten(), z.flatten())).T
-    faces = []
-    for i in range(resolution-1):
-        for j in range(resolution-1):
-            v0 = i * resolution + j
-            v1 = i * resolution + (j + 1)
-            v2 = (i + 1) * resolution + j
-            v3 = (i + 1) * resolution + (j + 1)
-            
-            faces.append([v0, v1, v2])
-            faces.append([v1, v3, v2])
-
-    return vertices, np.array(faces)
-
+    
 def detect_by_edge_similarity(points, edges):
     """
     Detect endpoints by finding points with small angles between edges (indicating
@@ -82,7 +39,7 @@ def construct_radius_connectivity(points, radius=None):
     if radius is None:
         tree = cKDTree(points)
         distances, _ = tree.query(points, k=3)
-        radius = np.mean(distances[:, 1]) * 2.45
+        radius = np.mean(distances[:, 1]) * 2.35
     print (f"Using radius: {radius}")
     
     tree = cKDTree(points)
@@ -154,112 +111,167 @@ def find_endpoints_per_skeleton(edges, n_points, component_labels):
     
     return component_endpoints, connections
 
-def create_visualization_obj(points, edges, endpoint_info, output_file, marker_radius=None, blend_colors=False):
-    """Modified to handle endpoints detected by multiple methods."""
-    if marker_radius is None:
-        if len(edges) > 0:
-            edge_lengths = np.linalg.norm(points[edges[:, 0]] - points[edges[:, 1]], axis=1)
-            marker_radius = np.mean(edge_lengths) * 2
-        else:
-            bbox_size = np.ptp(points, axis=0)
-            marker_radius = np.mean(bbox_size) * 0.02
-
-    colors = {
-        'connectivity': [255, 0, 0],    # Red
-        'density': [0, 255, 0],         # Green
-        'edge_similarity': [0, 0, 255]  # Blue
-    }
-
-    # Priority order for methods (if not blending)
-    method_priority = ['connectivity', 'density', 'edge_similarity']
-
-    all_vertices = points.tolist()
-    all_vertex_colors = [[128, 128, 128] for _ in range(len(points))]  # Default gray
-    all_faces = []
-    vertex_offset = len(all_vertices)
-
-    # First, collect all methods for each endpoint
-    endpoint_methods = {}
-    for component, endpoints_data in endpoint_info.items():
-        for endpoint, method in endpoints_data:
-            if endpoint not in endpoint_methods:
-                endpoint_methods[endpoint] = set()
-            endpoint_methods[endpoint].add(method)
-
-    # Process each endpoint
-    for component, endpoints_data in endpoint_info.items():
-        for endpoint, _ in endpoints_data:
-            if endpoint in endpoint_methods:  # Check if we haven't processed this endpoint yet
-                methods = endpoint_methods[endpoint]
-                
-                if blend_colors and len(methods) > 1:
-                    # Blend colors of all methods that detected this endpoint
-                    color = [0, 0, 0]
-                    for method in methods:
-                        method_color = colors[method]
-                        color = [c1 + c2 for c1, c2 in zip(color, method_color)]
-                    # Average the colors
-                    color = [min(255, c // len(methods)) for c in color]
-                else:
-                    # Use the highest priority method's color
-                    for method in method_priority:
-                        if method in methods:
-                            color = colors[method]
-                            break
-                    else:
-                        color = colors[list(methods)[0]]  # Fallback to first method if none in priority
-
-                sphere_verts, sphere_faces = create_sphere_marker(
-                    points[endpoint], 
-                    marker_radius
-                )
-                
-                # Add vertices and their colors
-                all_vertices.extend(sphere_verts.tolist())
-                all_vertex_colors.extend([color for _ in range(len(sphere_verts))])
-                
-                all_faces.extend((sphere_faces + vertex_offset).tolist())
-                vertex_offset += len(sphere_verts)
-                
-                # Remove this endpoint from our tracking dict to avoid processing it again
-                del endpoint_methods[endpoint]
-
-    # Write PLY file
-    with open(output_file, 'w') as f:
-        # Header
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {len(all_vertices)}\n")
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("property uchar red\n")
-        f.write("property uchar green\n")
-        f.write("property uchar blue\n")
-        f.write(f"element face {len(all_faces)}\n")
-        f.write("property list uchar int vertex_indices\n")
-        f.write("element edge {len(edges)}\n")
-        f.write("property int vertex1\n")
-        f.write("property int vertex2\n")
-        f.write("end_header\n")
-
-        # Vertices with colors
-        for vertex, color in zip(all_vertices, all_vertex_colors):
-            f.write(f"{vertex[0]} {vertex[1]} {vertex[2]} {color[0]} {color[1]} {color[2]}\n")
+def get_component_means(points, component_labels):
+    """Calculate mean coordinates for each skeleton component."""
+    unique_components = np.unique(component_labels)
+    component_means = {}
+    
+    for component in unique_components:
+        component_mask = (component_labels == component)
+        component_points = points[component_mask]
+        mean_coords = np.mean(component_points, axis=0)
+        component_means[component] = mean_coords
         
-        # Faces
-        for face in all_faces:
-            f.write(f"3 {face[0]} {face[1]} {face[2]}\n")
+    return component_means
 
-        # Edges
-        for edge in edges:
-            f.write(f"{edge[0]} {edge[1]}\n")
+def group_components_into_ribs(component_means, horizontal_threshold=20, vertical_threshold=10):
+    """Group components that likely belong to the same rib based on proximity."""
+    # Convert component_means to a list of tuples (component_id, coordinates)
+    # Convert numpy integers to regular integers here
+    components = [(int(comp_id), coords) for comp_id, coords in component_means.items()]
+    
+    # Sort components by y-coordinate (vertical position) and x-coordinate
+    sorted_components = sorted(components, key=lambda x: (x[1][1], x[1][0]))
+    
+    # Initialize rib groups
+    rib_groups = []
+    processed_components = set()
+    
+    # Group components that are close to each other
+    for i, (comp_id, coords) in enumerate(sorted_components):
+        if comp_id in processed_components:
+            continue
+            
+        current_group = [comp_id]  # Now using regular integer
+        processed_components.add(comp_id)
+        
+        # Check remaining components for proximity
+        for j, (other_id, other_coords) in enumerate(sorted_components[i+1:], i+1):
+            if other_id in processed_components:
+                continue
+                
+            # Calculate horizontal and vertical distances
+            horizontal_dist = abs(coords[0] - other_coords[0])
+            vertical_dist = abs(coords[1] - other_coords[1])
+            
+            if horizontal_dist < horizontal_threshold and vertical_dist < vertical_threshold:
+                current_group.append(other_id)  # Now using regular integer
+                processed_components.add(other_id)
+        
+        rib_groups.append(current_group)
+    
+    return rib_groups
+
+def assign_rib_numbers(rib_groups, component_means):
+    """
+    Assign rib numbers enforcing exactly 12 ribs on each side.
+    Will merge or split groups as needed to achieve this.
+    """
+    # Calculate mean position for each rib group
+    rib_positions = []
+    for i, group in enumerate(rib_groups):
+        if not group:  # Skip empty groups
+            continue
+        group_coords = np.mean([component_means[comp_id] for comp_id in group], axis=0)
+        rib_positions.append((i, group_coords))
+    
+    if not rib_positions:  # Handle case where all groups are empty
+        return {}
+    
+    # Split into left and right sides based on x-coordinate
+    median_x = np.median([pos[1][0] for pos in rib_positions])
+    left_positions = [(idx, pos) for idx, pos in rib_positions if pos[0] < median_x]
+    right_positions = [(idx, pos) for idx, pos in rib_positions if pos[0] >= median_x]
+    
+    def adjust_to_12_ribs(positions, side):
+        """Adjust number of groups to exactly 12 ribs."""
+        # Sort by Y coordinate
+        sorted_positions = sorted(positions, key=lambda x: x[1][1])
+        
+        if len(sorted_positions) > 12:
+            # If we have too many groups, merge closest ones
+            while len(sorted_positions) > 12:
+                # Find closest pair by Y coordinate
+                min_dist = float('inf')
+                merge_idx = 0
+                for i in range(len(sorted_positions) - 1):
+                    dist = abs(sorted_positions[i][1][1] - sorted_positions[i + 1][1][1])
+                    if dist < min_dist:
+                        min_dist = dist
+                        merge_idx = i
+                
+                # Merge the groups
+                group1_idx = sorted_positions[merge_idx][0]
+                group2_idx = sorted_positions[merge_idx + 1][0]
+                rib_groups[group1_idx].extend(rib_groups[group2_idx])
+                # Update mean position
+                new_mean = np.mean([component_means[comp_id] for comp_id in rib_groups[group1_idx]], axis=0)
+                
+                # Remove the merged group and update positions
+                sorted_positions.pop(merge_idx + 1)
+                sorted_positions[merge_idx] = (group1_idx, new_mean)
+        
+        elif len(sorted_positions) < 12:
+            # If we have too few groups, split largest gaps
+            sorted_positions = sorted(sorted_positions, key=lambda x: x[1][1])
+            while len(sorted_positions) < 12:
+                # Find largest gap in Y coordinates
+                max_gap = 0
+                split_idx = 0
+                for i in range(len(sorted_positions) - 1):
+                    gap = abs(sorted_positions[i + 1][1][1] - sorted_positions[i][1][1])
+                    if gap > max_gap:
+                        max_gap = gap
+                        split_idx = i
+                
+                # Create a new empty group at the midpoint
+                mid_y = (sorted_positions[split_idx][1][1] + sorted_positions[split_idx + 1][1][1]) / 2
+                mid_x = sorted_positions[split_idx][1][0]  # Keep same x coordinate
+                mid_z = (sorted_positions[split_idx][1][2] + sorted_positions[split_idx + 1][1][2]) / 2
+                new_pos = np.array([mid_x, mid_y, mid_z])
+                
+                # Add new empty group
+                rib_groups.append([])
+                new_group_idx = len(rib_groups) - 1
+                sorted_positions.insert(split_idx + 1, (new_group_idx, new_pos))
+        
+        return sorted_positions
+    
+    # Adjust both sides to exactly 12 ribs
+    left_positions = adjust_to_12_ribs(left_positions, 'left')
+    right_positions = adjust_to_12_ribs(right_positions, 'right')
+    
+    # Assign rib numbers
+    rib_numbers = {}
+    
+    # Left side: 1-12 from top to bottom
+    for i, (group_idx, _) in enumerate(sorted(left_positions, key=lambda x: x[1][1])):
+        rib_num = i + 1
+        for comp_id in rib_groups[group_idx]:
+            rib_numbers[int(comp_id)] = f"L{rib_num}"
+    
+    # Right side: 1-12 from top to bottom (changed from previous bottom-to-top)
+    for i, (group_idx, _) in enumerate(sorted(right_positions, key=lambda x: x[1][1])):
+        rib_num = i + 1
+        for comp_id in rib_groups[group_idx]:
+            rib_numbers[int(comp_id)] = f"R{rib_num}"
+    
+    return rib_numbers
 
 def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
-    points = load_skeleton_file(input_file)
+    points = pc.load_skeleton_file(input_file)
     edges, used_radius = construct_radius_connectivity(points, radius)
     
     n_components, component_labels = identify_separate_skeletons(points, edges, len(points))
+    
+    # Get component means
+    component_means = get_component_means(points, component_labels)
+    
+    # Group components into ribs
+    rib_groups = group_components_into_ribs(component_means)
+    
+    # Assign rib numbers
+    rib_numbers = assign_rib_numbers(rib_groups, component_means)
     
     # Get endpoints from all methods
     connectivity_endpoints, connections = find_endpoints_per_skeleton(edges, len(points), component_labels)
@@ -281,7 +293,6 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
         endpoints_with_method = []
         processed_points = set()
         
-        # Process methods in priority order
         methods = [
             ('connectivity', connectivity_endpoints.get(component, [])),
             ('density', component_points[density_endpoints[component_mask]]),
@@ -297,25 +308,61 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
         
         combined_endpoints[component] = endpoints_with_method
     
-    create_visualization_obj(points, edges, combined_endpoints, output_obj)
+        pc.create_visualization_obj(points, edges, combined_endpoints, output_obj)
     
-    # Print detection counts
-    print("\nEndpoint Detection Counts:")
-    for method, count in method_counts.items():
-        print(f"{method}: {count} endpoints")
+    # Sort components by rib number
+    def get_rib_sort_key(item):
+        component, rib_id = item
+        side = rib_id[0]  # 'R' or 'L'
+        number = int(rib_id[1:])  # Rib number
+        # Sort R1-R12 first, then L1-L12
+        return (0 if side == 'R' else 1, number, component)
     
-    return n_components, combined_endpoints
+    sorted_components = sorted([(comp, rib_numbers[comp]) for comp in range(n_components)], 
+                             key=get_rib_sort_key)
+    
+    # Print sorted component information
+    print("\nComponent Analysis:")
+    for component in range(n_components):
+        mean_coords = component_means[component]
+        rib_id = rib_numbers.get(component, "Unassigned")
+        print(f"Component {component} (Rib {rib_id}):")
+        print(f"  Mean coordinates: X={mean_coords[0]:.2f}, Y={mean_coords[1]:.2f}, Z={mean_coords[2]:.2f}")
+    
+    # Print sorted rib grouping information
+    print("\nRib Groups:")
+    # Create a dictionary to group components by rib ID
+    rib_to_components = {}
+    for group in rib_groups:
+        if not group:  # Skip empty groups
+            continue
+        rib_id = rib_numbers.get(group[0], "Unassigned")
+        rib_to_components[rib_id] = group
+    
+    # Create list of all possible rib IDs
+    all_rib_ids = ([f"R{i}" for i in range(1, 13)] + 
+                   [f"L{i}" for i in range(1, 13)])
+    
+    # Print all ribs in order
+    for rib_id in all_rib_ids:
+        if rib_id in rib_to_components:
+            group = rib_to_components[rib_id]
+            print(f"Rib {rib_id}: Components {sorted(group)}")
+            if len(group) > 1:
+                print("  Potential fracture detected (multiple components)")
+        else:
+            print(f"Rib {rib_id}: No components (empty)")
+    
+    return n_components, combined_endpoints, rib_numbers, rib_groups
 
 def process_directory(directory_path, radius=None):
     """Process all OBJ and XYZ files in the given directory."""
     directory = Path(directory_path)
     results = {}
     
-    # Create output directory for results
     output_dir = directory / "endpoint_analysis"
     output_dir.mkdir(exist_ok=True)
     
-    # Find all OBJ and XYZ files
     skeleton_files = list(directory.glob("*.obj")) + list(directory.glob("*.xyz"))
     if not skeleton_files:
         print(f"No OBJ or XYZ files found in {directory}")
@@ -323,32 +370,37 @@ def process_directory(directory_path, radius=None):
     
     print(f"Found {len(skeleton_files)} files to process")
     
-    # Process each file
     for file in skeleton_files:
-        # Skip files that already have _endpoints suffix
         if file.stem.endswith("_endpoints"):
             continue
         print(f"\nProcessing: {file.name}")
-        # Create output path (always save as OBJ)
         output_file = output_dir / f"{file.stem}_endpoints.ply"
         
         try:
-            # Process the file
-            n_components, component_endpoints = analyze_and_visualize_skeleton(
+            n_components, component_endpoints, rib_numbers, rib_groups = analyze_and_visualize_skeleton(
                 str(file), str(output_file), radius
             )
             
-            # Store results
+            # Convert numpy integers to regular integers
+            converted_rib_groups = []
+            for group in rib_groups:
+                if group:  # Only process non-empty groups
+                    converted_group = [int(comp) for comp in group]
+                    converted_rib_groups.append(converted_group)
+                else:
+                    converted_rib_groups.append([])  # Keep empty groups as empty lists
+            
+            # Count potential fractures (groups with multiple components)
+            fracture_count = sum(1 for group in converted_rib_groups if len(group) > 1)
+            
             results[file.name] = {
                 'n_components': n_components,
-                'endpoints_per_component': {comp: len(endpoints) 
-                                         for comp, endpoints in component_endpoints.items()}
+                'endpoints_per_component': {int(comp): len(endpoints) 
+                                         for comp, endpoints in component_endpoints.items()},
+                'rib_assignments': {int(comp): rib for comp, rib in rib_numbers.items()},
+                'potential_fractures': converted_rib_groups,
+                'fracture_count': fracture_count  # Add fracture count to results
             }
-            
-            print(f"Found {n_components} separate skeletons")
-            for comp, endpoints in component_endpoints.items():
-                print(f"Skeleton {comp}: {len(endpoints)} endpoints")
-            print(f"Visualization saved to: {output_file}")
             
         except Exception as e:
             print(f"Error processing {file.name}: {str(e)}")
@@ -362,17 +414,42 @@ def process_directory(directory_path, radius=None):
         for filename, data in results.items():
             f.write(f"File: {filename}\n")
             f.write(f"Number of skeletons: {data['n_components']}\n")
-            f.write("Endpoints per skeleton:\n")
-            for comp, n_endpoints in data['endpoints_per_component'].items():
-                f.write(f"  Skeleton {comp}: {n_endpoints} endpoints\n")
+            f.write(f"Number of potential fractures: {data['fracture_count']}\n")  # Add fracture count
+            f.write("\nRib Assignments:\n")
+            
+            # Create lists of all ribs to ensure we show even empty ones
+            all_ribs = ([f"R{i}" for i in range(1, 13)] + 
+                       [f"L{i}" for i in range(1, 13)])
+            
+            # Track which components belong to each rib
+            rib_to_comps = {}
+            for comp, rib in data['rib_assignments'].items():
+                if rib not in rib_to_comps:
+                    rib_to_comps[rib] = []
+                rib_to_comps[rib].append(comp)
+            
+            # Print all ribs in order, indicating empty ones
+            for rib_id in all_ribs:
+                if rib_id in rib_to_comps:
+                    components = sorted(rib_to_comps[rib_id])
+                    f.write(f"  Rib {rib_id}: Components {components}\n")
+                else:
+                    f.write(f"  Rib {rib_id}: No components (empty)\n")
+            
+            if data['potential_fractures']:
+                f.write("\nPotential Fractures:\n")
+                for group in data['potential_fractures']:
+                    if group and len(group) > 1:  # Only print groups with multiple components
+                        rib = data['rib_assignments'].get(group[0], "Unassigned")
+                        f.write(f"  Rib {rib}: Components {sorted(group)}\n")
             f.write("\n")
-    
-    print(f"\nAnalysis complete. Summary report saved to: {report_path}")
-    
+
 def main():
     parser = argparse.ArgumentParser(description="Perform geometric analysis on OBJ files in a directory")
     parser.add_argument("directory_path", help="Path to the directory containing OBJ files")
     parser.add_argument("--radius", type=float, help="Optional: Specify connectivity radius", default=None)
+    parser.add_argument("--horizontal-threshold", type=float, help="Threshold for horizontal component grouping", default=20)
+    parser.add_argument("--vertical-threshold", type=float, help="Threshold for vertical component grouping", default=10)
     args = parser.parse_args()
     process_directory(args.directory_path, args.radius)
 
