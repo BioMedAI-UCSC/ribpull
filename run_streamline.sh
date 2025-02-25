@@ -20,7 +20,7 @@ python utils/split_fgnd_bgnd.py "$INPUT_DIR" "$VISUALIZATION_PLY_DIR"
 echo "Converting PLY files to normalized xyz with calculated normals..."
 
 # Step 2: Convert to XYZ with normals
-python utils/convert_to_xyz.py "$VISUALIZATION_PLY_DIR" "$XYZ_NORMAL_DIR"
+python utils/convert_formats/convert_to_xyz.py "$VISUALIZATION_PLY_DIR" "$XYZ_NORMAL_DIR"
 
 echo "For each XYZ file, run Neural Skeleton to extract skeleton as OBJ file..."
 
