@@ -2,6 +2,8 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt
 import argparse
 import os
+from skimage import measure
+import trimesh
 
 def create_volume_from_labeled_points(points, labels, volume_shape):
     """
@@ -83,6 +85,40 @@ def process_labeled_ct_scan(points, labels, volume_shape=None):
     
     return sdf, binary_volume
 
+def extract_isosurface(sdf, level=0.0):
+    """
+    Extract isosurface from SDF using marching cubes.
+    
+    Args:
+        sdf: 3D numpy array with SDF values
+        level: Isosurface level (0.0 for surface)
+        
+    Returns:
+        vertices, faces from marching cubes
+    """
+    # Extract the isosurface using marching cubes
+    verts, faces, normals, _ = measure.marching_cubes(sdf, level=level)
+    
+    return verts, faces, normals
+
+def save_isosurface_as_ply(verts, faces, normals, output_path):
+    """
+    Save isosurface as PLY file.
+    
+    Args:
+        verts: Vertices from marching cubes
+        faces: Faces from marching cubes
+        normals: Vertex normals
+        output_path: Path to save PLY file
+    """
+    # Create mesh
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=normals)
+    
+    # Save as PLY
+    mesh.export(output_path)
+    
+    return True
+
 def main():
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Convert CT point cloud to SDF')
@@ -91,6 +127,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='.', help='Directory to save output files')
     parser.add_argument('--output_prefix', type=str, default='output', help='Prefix for output files')
     parser.add_argument('--volume_shape', type=int, nargs=3, help='Custom volume shape (depth height width)')
+    parser.add_argument('--save_isosurface', action='store_true', help='Save isosurface as PLY mesh')
     
     args = parser.parse_args()
     
@@ -120,6 +157,15 @@ def main():
     
     print(f"Saving binary volume to {volume_output_path}")
     np.save(volume_output_path, binary_volume)
+    
+    # Optionally extract and save isosurface
+    if args.save_isosurface:
+        isosurface_path = os.path.join(args.output_dir, f"{args.output_prefix}_isosurface.ply")
+        print(f"Extracting isosurface...")
+        verts, faces, normals = extract_isosurface(sdf)
+        
+        print(f"Saving isosurface to {isosurface_path}")
+        save_isosurface_as_ply(verts, faces, normals, isosurface_path)
     
     print("Processing complete!")
     print(f"SDF shape: {sdf.shape}")
