@@ -5,8 +5,43 @@ from scipy.sparse.csgraph import connected_components
 import argparse
 from pathlib import Path
 import pc_processor as pc
+import csv
+
+
+def export_endpoints_to_csv(points, combined_endpoints, component_labels, rib_numbers, output_csv):
+    """
+    Export the detected endpoints and their coordinates to a CSV file.
     
+    Parameters:
+    points (np.array): The point cloud data
+    combined_endpoints (dict): Dictionary mapping component IDs to endpoint indices
+    component_labels (np.array): Array indicating which component each point belongs to
+    rib_numbers (dict): Dictionary mapping component IDs to rib designations
+    output_csv (str): Path to output CSV file
+    """
+    with open(output_csv, 'w', newline='') as csvfile:
+        fieldnames = ['point_index', 'x', 'y', 'z', 'component_id', 'rib_designation', 'detection_method']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        # Write data for each endpoint
+        for component_id, endpoints_with_method in combined_endpoints.items():
+            rib_designation = rib_numbers.get(component_id, "Unassigned")
+            for endpoint_index, detection_method in endpoints_with_method:
+                x, y, z = points[endpoint_index]
+                writer.writerow({
+                    'point_index': int(endpoint_index),
+                    'x': float(x),
+                    'y': float(y),
+                    'z': float(z),
+                    'component_id': int(component_id),
+                    'rib_designation': rib_designation,
+                    'detection_method': detection_method
+                })
     
+    print(f"Endpoint coordinates exported to {output_csv}")
+
+
 def detect_by_edge_similarity(points, edges):
     """
     Detect endpoints by finding points with small angles between edges (indicating
@@ -34,19 +69,21 @@ def detect_by_edge_similarity(points, edges):
         endpoint_mask[i] = is_endpoint
     return endpoint_mask
 
+
 def construct_radius_connectivity(points, radius=None):
     """Construct connectivity graph using radius-based neighbor search."""
     if radius is None:
         tree = cKDTree(points)
         distances, _ = tree.query(points, k=3)
         radius = np.mean(distances[:, 1]) * 2.35
-    print (f"Using radius: {radius}")
+    print(f"Using radius: {radius}")
     
     tree = cKDTree(points)
     pairs = list(tree.query_pairs(radius))
     edges = np.array(pairs) if pairs else np.zeros((0, 2), dtype=int)
     
     return edges, radius
+
 
 def detect_endpoints_by_density(points, box_size=None):
     """Detect endpoints by counting points within a local box neighborhood."""
@@ -76,6 +113,7 @@ def detect_endpoints_by_density(points, box_size=None):
             
     return endpoint_mask
 
+
 def identify_separate_skeletons(points, edges, n_points):
     """Identify separate skeleton components in the point cloud."""
     adj_matrix = csr_matrix(
@@ -91,6 +129,7 @@ def identify_separate_skeletons(points, edges, n_points):
     )
     
     return n_components, labels
+
 
 def find_endpoints_per_skeleton(edges, n_points, component_labels):
     """Find endpoints for each separate skeleton component."""
@@ -111,6 +150,7 @@ def find_endpoints_per_skeleton(edges, n_points, component_labels):
     
     return component_endpoints, connections
 
+
 def get_component_means(points, component_labels):
     """Calculate mean coordinates for each skeleton component."""
     unique_components = np.unique(component_labels)
@@ -123,6 +163,7 @@ def get_component_means(points, component_labels):
         component_means[component] = mean_coords
         
     return component_means
+
 
 def group_components_into_ribs(component_means, horizontal_threshold=20, vertical_threshold=10):
     """Group components that likely belong to the same rib based on proximity."""
@@ -161,6 +202,7 @@ def group_components_into_ribs(component_means, horizontal_threshold=20, vertica
         rib_groups.append(current_group)
     
     return rib_groups
+
 
 def assign_rib_numbers(rib_groups, component_means):
     """
@@ -258,6 +300,7 @@ def assign_rib_numbers(rib_groups, component_means):
     
     return rib_numbers
 
+
 def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
     points = pc.load_skeleton_file(input_file)
     edges, used_radius = construct_radius_connectivity(points, radius)
@@ -308,7 +351,14 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
         
         combined_endpoints[component] = endpoints_with_method
     
-        pc.create_visualization_obj(points, edges, combined_endpoints, output_obj)
+    # Create visualization file
+    pc.create_visualization_obj(points, edges, combined_endpoints, output_obj)
+    
+    # Create CSV output filename from output_obj path
+    output_csv = output_obj.rsplit('.', 1)[0] + '_coordinates.csv'
+    
+    # Export endpoints to CSV
+    export_endpoints_to_csv(points, combined_endpoints, component_labels, rib_numbers, output_csv)
     
     # Sort components by rib number
     def get_rib_sort_key(item):
@@ -354,6 +404,7 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
             print(f"Rib {rib_id}: No components (empty)")
     
     return n_components, combined_endpoints, rib_numbers, rib_groups
+
 
 def process_directory(directory_path, radius=None):
     """Process all OBJ and XYZ files in the given directory."""
@@ -443,6 +494,31 @@ def process_directory(directory_path, radius=None):
                         rib = data['rib_assignments'].get(group[0], "Unassigned")
                         f.write(f"  Rib {rib}: Components {sorted(group)}\n")
             f.write("\n")
+    
+    # Create a master CSV with all endpoints from all files
+    master_csv_path = output_dir / "all_endpoints.csv"
+    with open(master_csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['file', 'rib', 'component_id', 'fracture_detected', 'endpoint_count'])
+        
+        for filename, data in results.items():
+            for comp, rib in data['rib_assignments'].items():
+                # Find which group this component belongs to
+                group = next((g for g in data['potential_fractures'] if comp in g), [])
+                fracture_detected = len(group) > 1
+                endpoint_count = data['endpoints_per_component'].get(comp, 0)
+                
+                writer.writerow([
+                    filename,
+                    rib,
+                    comp,
+                    'Yes' if fracture_detected else 'No',
+                    endpoint_count
+                ])
+    
+    print(f"\nAnalysis complete. Results saved to {output_dir}")
+    print(f"Endpoints summary saved to {master_csv_path}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Perform geometric analysis on OBJ files in a directory")
@@ -452,6 +528,7 @@ def main():
     parser.add_argument("--vertical-threshold", type=float, help="Threshold for vertical component grouping", default=10)
     args = parser.parse_args()
     process_directory(args.directory_path, args.radius)
+
 
 if __name__ == "__main__":
     main()
