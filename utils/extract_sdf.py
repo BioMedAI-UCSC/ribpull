@@ -19,7 +19,6 @@ def create_volume_from_labeled_points(points, labels, volume_shape, spacing=None
     Returns:
         Binary numpy array of given shape
     """
-    # Initialize empty volume
     volume = np.zeros(volume_shape, dtype=bool)
     
     # Scale points if spacing is provided
@@ -31,8 +30,10 @@ def create_volume_from_labeled_points(points, labels, volume_shape, spacing=None
     else:
         points_to_use = points
     
-    # Get only foreground points
+    # Foreground points are labeled as 1
     foreground_points = points_to_use[labels == 1].astype(int)
+
+    #import pdb; pdb.set_trace()
     
     # Ensure all points are within bounds
     valid_mask = (
@@ -75,18 +76,14 @@ def compute_sdf(binary_volume, sigma=1.0):
         print("Warning: Full binary volume - SDF calculation may be meaningless")
         return -np.ones(binary_volume.shape)
     
-    # Compute distance from surface to each outside point
+    # Performs distance transform -> Replaces foreground (non-zero) with shortest distance from background
+    # Surface to outside point is a positive distance, surface to inside point is a negative distance
     outside_distance = distance_transform_edt(~binary_volume)
-    
-    # Compute distance from surface to each inside point
     inside_distance = distance_transform_edt(binary_volume)
-    
     # Combine to get signed distance field
-    # Points outside have positive distances
-    # Points inside have negative distances
     sdf = outside_distance - inside_distance
     
-    # Apply Gaussian smoothing if sigma > 0
+    # Make the sdf smoother by applying a gaussian filter
     if sigma > 0:
         print(f"Applying Gaussian smoothing with sigma={sigma}")
         sdf = gaussian_filter(sdf, sigma=sigma)
@@ -110,22 +107,22 @@ def process_labeled_ct_scan(points, labels, volume_shape=None, spacing=None, dbs
     Returns:
         SDF as numpy array and binary volume
     """
-    # Apply denoising
-    print(f"Denoising point cloud with DBSCAN (eps={dbscan_eps}, min_samples={dbscan_min_samples})...")
-    denoised_points, denoised_labels = denoise_pc.denoise_point_cloud(
-        points, labels, eps=dbscan_eps, min_samples=dbscan_min_samples
-    )
+    # Apply denoising -> BUGGY TO BE FIXED
+    #print(f"Denoising point cloud with DBSCAN (eps={dbscan_eps}, min_samples={dbscan_min_samples})...")
+    #points, labels = denoise_pc.denoise_point_cloud(
+    #    points, labels, eps=dbscan_eps, min_samples=dbscan_min_samples
+    #)
     
     # Determine volume shape if not provided
     if volume_shape is None:
         if spacing is not None:
             # Scale by spacing if provided
-            scaled_points = denoised_points.copy()
+            scaled_points = points.copy()
             for i in range(3):
                 scaled_points[:, i] = scaled_points[:, i] / spacing[i]
             max_coords = np.max(scaled_points, axis=0)
         else:
-            max_coords = np.max(denoised_points, axis=0)
+            max_coords = np.max(points, axis=0)
         
         volume_shape = tuple(max_coords.astype(int) + 1)
         print(f"Automatically determined volume shape: {volume_shape}")
@@ -133,7 +130,7 @@ def process_labeled_ct_scan(points, labels, volume_shape=None, spacing=None, dbs
     # Create binary volume
     print("Creating binary volume...")
     binary_volume = create_volume_from_labeled_points(
-        denoised_points, denoised_labels, volume_shape, spacing
+        points, labels, volume_shape, spacing
     )
     
     # Compute SDF
@@ -208,12 +205,7 @@ def validate_and_clean_mesh(verts, faces, normals):
         return None, None, None
     
     try:
-        # Create trimesh object
         mesh = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=normals)
-        
-        # Check for issues
-        if not mesh.is_watertight:
-            print("Warning: Mesh is not watertight")
         
         if not mesh.is_winding_consistent:
             print("Fixing inconsistent face winding...")
@@ -230,11 +222,6 @@ def validate_and_clean_mesh(verts, faces, normals):
         mesh.remove_degenerate_faces()
         if len(mesh.faces) < initial_faces:
             print(f"Removed {initial_faces - len(mesh.faces)} degenerate faces")
-        
-        # Fill holes (if needed)
-        if not mesh.is_watertight and len(mesh.faces) > 0:
-            print("Attempting to fill holes...")
-            mesh.fill_holes()
         
         return mesh.vertices, mesh.faces, mesh.vertex_normals
     
@@ -339,7 +326,7 @@ def main():
         
         verts, faces, normals = extract_isosurface(sdf, spacing=spacing)
         
-        # Validate and clean mesh
+        # Post-Processing: Validate and clean mesh 
         verts, faces, normals = validate_and_clean_mesh(verts, faces, normals)
         
         if verts is not None and faces is not None:
