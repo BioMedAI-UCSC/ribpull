@@ -288,14 +288,14 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
 
     potential_fracture_endpoints = identify_potential_fractures(points, combined_endpoints)
     
-    # Create visualization file - MODIFY THIS TO USE potential_fracture_endpoints
+    # Create visualization file
     pc.create_visualization_obj(points, edges, potential_fracture_endpoints, output_obj)
     
     # Create CSV output filename from output_obj path
     output_csv = output_obj.rsplit('.', 1)[0] + '_coordinates.csv'
     
-    # Export endpoints to CSV - MODIFY THIS TO USE potential_fracture_endpoints
-    export_endpoints_to_csv(points, potential_fracture_endpoints, component_labels, rib_numbers, output_csv)
+    # Export only potential fracture endpoints to CSV, passing rib_groups for fracture identification
+    export_endpoints_to_csv(points, potential_fracture_endpoints, component_labels, rib_numbers, output_csv, rib_groups)
     
     # Sort components by rib number
     def get_rib_sort_key(item):
@@ -308,43 +308,12 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
     sorted_components = sorted([(comp, rib_numbers[comp]) for comp in range(n_components)], 
                              key=get_rib_sort_key)
     
-    # Print sorted component information
-    # print("\nComponent Analysis:")
-    # for component in range(n_components):
-    #    mean_coords = component_means[component]
-    #    rib_id = rib_numbers.get(component, "Unassigned")
-    #    print(f"Component {component} (Rib {rib_id}):")
-    #    print(f"  Mean coordinates: X={mean_coords[0]:.2f}, Y={mean_coords[1]:.2f}, Z={mean_coords[2]:.2f}")
-    
-    # Print sorted rib grouping information
-    # print("\nRib Groups:")
-    # Create a dictionary to group components by rib ID
-    rib_to_components = {}
-    for group in rib_groups:
-        if not group:  # Skip empty groups
-            continue
-        rib_id = rib_numbers.get(group[0], "Unassigned")
-        rib_to_components[rib_id] = group
-    
-    # Create list of all possible rib IDs
-    # all_rib_ids = ([f"R{i}" for i in range(1, 13)] + 
-    #              [f"L{i}" for i in range(1, 13)])
-    
-    # Print all ribs in order
-    # for rib_id in all_rib_ids:
-    #    if rib_id in rib_to_components:
-    #        group = rib_to_components[rib_id]
-    #        print(f"Rib {rib_id}: Components {sorted(group)}")
-    #        if len(group) > 1:
-    #            print("  Potential fracture detected (multiple components)")
-    #    else:
-    #        print(f"Rib {rib_id}: No components (empty)")
-    
     return n_components, combined_endpoints, rib_numbers, rib_groups
 
-def export_endpoints_to_csv(points, combined_endpoints, component_labels, rib_numbers, output_csv):
+def export_endpoints_to_csv(points, combined_endpoints, component_labels, rib_numbers, output_csv, rib_groups=None):
     """
     Export the detected endpoints and their coordinates to a CSV file.
+    Only includes endpoints that are part of a potential fracture (ribs with multiple components).
     
     Parameters:
     points (np.array): The point cloud data
@@ -352,14 +321,47 @@ def export_endpoints_to_csv(points, combined_endpoints, component_labels, rib_nu
     component_labels (np.array): Array indicating which component each point belongs to
     rib_numbers (dict): Dictionary mapping component IDs to rib designations
     output_csv (str): Path to output CSV file
+    rib_groups (list, optional): List of component groups that make up each rib
     """
+    # First, identify components that are part of potential fractures
+    fractured_components = set()
+    
+    # If rib_groups is provided, use it to identify fractured components
+    if rib_groups is not None:
+        for group in rib_groups:
+            if len(group) > 1:  # If rib has multiple components, it's a potential fracture
+                for comp in group:
+                    fractured_components.add(int(comp))
+    
+    # If no rib_groups provided or no fractures found, create mapping of ribs to components
+    if not fractured_components:
+        # Group components by rib designation
+        rib_to_comps = {}
+        for comp, rib in rib_numbers.items():
+            if rib not in rib_to_comps:
+                rib_to_comps[rib] = []
+            rib_to_comps[rib].append(int(comp))
+        
+        # Mark components in ribs with multiple components as fractured
+        for rib, comps in rib_to_comps.items():
+            if len(comps) > 1:
+                for comp in comps:
+                    fractured_components.add(comp)
+    
     with open(output_csv, 'w', newline='') as csvfile:
         fieldnames = ['point_index', 'x', 'y', 'z', 'component_id', 'rib_designation', 'detection_method']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
+
+        import pdb; pdb.set_trace()
         
-        # Write data for each endpoint
+        # Only write data for endpoints in components that are part of potential fractures
+        endpoint_count = 0
         for component_id, endpoints_with_method in combined_endpoints.items():
+            # Skip components that aren't part of a potential fracture
+            if int(component_id) not in fractured_components:
+                continue
+                
             rib_designation = rib_numbers.get(component_id, "Unassigned")
             for endpoint_index, detection_method in endpoints_with_method:
                 x, y, z = points[endpoint_index]
@@ -372,8 +374,9 @@ def export_endpoints_to_csv(points, combined_endpoints, component_labels, rib_nu
                     'rib_designation': rib_designation,
                     'detection_method': detection_method
                 })
+                endpoint_count += 1
     
-    print(f"Endpoint coordinates exported to {output_csv}")
+    print(f"Exported {endpoint_count} fracture endpoints to {output_csv}")
 
 
 def process_directory(directory_path, radius=None):
@@ -465,29 +468,45 @@ def process_directory(directory_path, radius=None):
                         f.write(f"  Rib {rib}: Components {sorted(group)}\n")
             f.write("\n")
     
-    # Create a master CSV with all endpoints from all files
-    master_csv_path = output_dir / "all_endpoints.csv"
+    # Create a master CSV with ONLY potential fractures
+    master_csv_path = output_dir / "all_fractures.csv"
     with open(master_csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['file', 'rib', 'component_id', 'fracture_detected', 'endpoint_count'])
+        writer.writerow(['file', 'rib', 'components', 'component_count', 'fracture_detail'])
         
         for filename, data in results.items():
-            for comp, rib in data['rib_assignments'].items():
-                # Find which group this component belongs to
-                group = next((g for g in data['potential_fractures'] if comp in g), [])
-                fracture_detected = len(group) > 1
-                endpoint_count = data['endpoints_per_component'].get(comp, 0)
+            # Dictionary to store fractures by rib
+            rib_fractures = {}
+            
+            # Identify fractures (groups with multiple components)
+            for group in data['potential_fractures']:
+                if group and len(group) > 1:  # Only consider groups with multiple components
+                    rib = data['rib_assignments'].get(group[0], "Unassigned")
+                    rib_fractures[rib] = sorted(group)
+            
+            # Write fracture data
+            for rib, components in rib_fractures.items():
+                component_str = ', '.join(map(str, components))
+                component_count = len(components)
+                
+                # Build fracture detail string
+                details = []
+                for comp in components:
+                    endpoint_count = data['endpoints_per_component'].get(comp, 0)
+                    details.append(f"Component {comp}: {endpoint_count} endpoints")
+                
+                fracture_detail = '; '.join(details)
                 
                 writer.writerow([
                     filename,
                     rib,
-                    comp,
-                    'Yes' if fracture_detected else 'No',
-                    endpoint_count
+                    component_str,
+                    component_count,
+                    fracture_detail
                 ])
     
     print(f"\nAnalysis complete. Results saved to {output_dir}")
-    print(f"Endpoints summary saved to {master_csv_path}")
+    print(f"Fracture summary saved to {master_csv_path}")
 
 
 def main():
@@ -502,3 +521,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
