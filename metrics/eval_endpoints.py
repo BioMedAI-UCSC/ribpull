@@ -6,7 +6,7 @@ import argparse
 from plyfile import PlyData, PlyElement
 import os
 
-def evaluate_fracture_points_from_csv(nifti_path, csv_path, distance_threshold=5.0, output_path=None):
+def evaluate_fracture_points_from_csv(nifti_path, csv_path, distance_threshold, output_path=None):
     """
     Evaluate if fracture endpoints in a CSV file are true positives by checking their proximity
     to labeled fracture voxels in a NIfTI file.
@@ -218,72 +218,154 @@ def save_evaluation_to_ply(csv_results, output_ply_path):
     except Exception as e:
         print(f"Error saving evaluation to PLY: {e}")
 
-def evaluate_single_ribcage(nifti_path, csv_path, distance_threshold=5.0, output_path=None, output_ply=None):
+def process_directories(csv_directory, nifti_directory, distance_threshold=5.0, output_directory=None):
     """
-    Evaluate a single ribcage by processing a CSV file containing endpoints for that ribcage.
+    Process matching pairs of CSV and NIfTI files from two directories.
+    
+    This function matches files by their base name (before the first hyphen).
+    For example, "RibFrac1-label.nii" will match with "RibFrac1-rib-cl_pointcloud_endpoints_coordinates.csv"
     
     Parameters:
     -----------
-    nifti_path : str
-        Path to the NIfTI label file for this specific ribcage
-    csv_path : str
-        Path to the CSV file with endpoint coordinates for this ribcage
+    csv_directory : str
+        Path to the directory containing CSV files with endpoint coordinates
+    nifti_directory : str
+        Path to the directory containing NIfTI label files
     distance_threshold : float
         Maximum distance (mm) for a point to be considered a true positive
-    output_path : str, optional
-        Path to save the evaluation results CSV
-    output_ply : str, optional
-        Path to save the PLY visualization
-    
-    Returns:
-    --------
-    DataFrame with evaluation results
+    output_directory : str, optional
+        Directory to save output files
     """
-    print(f"\nEvaluating single ribcage")
-    print(f"NIfTI file: {nifti_path}")
-    print(f"CSV file: {csv_path}")
+    # Create output directory if specified
+    if output_directory and not os.path.exists(output_directory):
+        os.makedirs(output_directory)
     
-    # Evaluate the endpoints
-    results = evaluate_fracture_points_from_csv(
-        nifti_path,
-        csv_path,
-        distance_threshold=distance_threshold,
-        output_path=output_path
-    )
+    # Get list of files in each directory
+    csv_files = [f for f in os.listdir(csv_directory) if f.endswith('.csv')]
+    nifti_files = [f for f in os.listdir(nifti_directory) if f.endswith(('.nii', '.nii.gz'))]
     
-    if results is not None:
-        # Calculate and print overall ribcage statistics
-        tp_count = results['is_true_positive'].sum()
-        total_count = len(results)
+    print(f"Found {len(csv_files)} CSV files and {len(nifti_files)} NIfTI files")
+    
+    # Create dictionaries mapping base names to files
+    csv_dict = {}
+    for file in csv_files:
+        # Extract base name (before first hyphen)
+        base_name = file.split('-')[0]
+        csv_dict[base_name] = file
+    
+    nifti_dict = {}
+    for file in nifti_files:
+        # Extract base name (before first hyphen)
+        base_name = file.split('-')[0]
+        nifti_dict[base_name] = file
+    
+    # Find matching pairs
+    matched_pairs = []
+    for base_name in csv_dict.keys():
+        if base_name in nifti_dict:
+            matched_pairs.append((base_name, csv_dict[base_name], nifti_dict[base_name]))
+    
+    print(f"Found {len(matched_pairs)} matching file pairs")
+    
+    # Create a summary dataframe
+    summary_results = []
+    
+    # Process each matching pair
+    for base_name, csv_file, nifti_file in matched_pairs:
+        print(f"\nProcessing: {base_name}")
+        print(f"  CSV: {csv_file}")
+        print(f"  NIfTI: {nifti_file}")
         
-        print("\n--- Ribcage Summary ---")
-        print(f"Total endpoints: {total_count}")
-        print(f"True positives: {tp_count} ({tp_count/total_count*100:.2f}%)")
-        print(f"False positives: {total_count - tp_count} ({(total_count-tp_count)/total_count*100:.2f}%)")
-        print(f"Average distance to fracture: {results['distance_to_nearest_fracture'].mean():.2f} mm")
+        csv_path = os.path.join(csv_directory, csv_file)
+        nifti_path = os.path.join(nifti_directory, nifti_file)
         
-        # Save to PLY if requested
-        if output_ply:
-            save_evaluation_to_ply(results, output_ply)
+        # Set up output paths if needed
+        if output_directory:
+            output_csv = os.path.join(output_directory, f"{base_name}_evaluation.csv")
+            output_ply = os.path.join(output_directory, f"{base_name}_evaluation.ply")
+        else:
+            output_csv = None
+            output_ply = None
+        
+        # Process the pair
+        results = evaluate_fracture_points_from_csv(
+            nifti_path,
+            csv_path,
+            distance_threshold=distance_threshold,
+            output_path=output_csv
+        )
+        
+        if results is not None:
+            # Save PLY visualization if requested
+            if output_directory:
+                save_evaluation_to_ply(results, output_ply)
             
-    return results
+            # Calculate summary statistics
+            tp_count = results['is_true_positive'].sum()
+            total_count = len(results)
+            
+            # Store summary statistics
+            summary_results.append({
+                'ribcage_id': base_name,
+                'csv_file': csv_file,
+                'nifti_file': nifti_file,
+                'total_points': total_count,
+                'true_positives': tp_count,
+                'false_positives': total_count - tp_count,
+                'true_positive_rate': (tp_count / total_count * 100) if total_count > 0 else 0,
+                'avg_distance': results['distance_to_nearest_fracture'].mean()
+            })
+            
+            # Print summary for this ribcage
+            print(f"  Total endpoints: {total_count}")
+            print(f"  True positives: {tp_count} ({tp_count/total_count*100:.2f}%)")
+            print(f"  False positives: {total_count - tp_count} ({(total_count-tp_count)/total_count*100:.2f}%)")
+            print(f"  Average distance: {results['distance_to_nearest_fracture'].mean():.2f} mm")
+            
+            # Print rib-specific stats if available
+            if 'rib_designation' in results.columns:
+                rib_stats = results.groupby('rib_designation').agg(
+                    total=('is_true_positive', 'count'),
+                    tp=('is_true_positive', 'sum')
+                )
+                rib_stats['tp_rate'] = (rib_stats['tp'] / rib_stats['total'] * 100).round(1)
+                print("  Rib-specific true positive rates:")
+                for rib, row in rib_stats.iterrows():
+                    print(f"    {rib}: {row['tp_rate']}% ({row['tp']}/{row['total']})")
+    
+    # Save overall summary if we have results and an output directory
+    if summary_results and output_directory:
+        summary_df = pd.DataFrame(summary_results)
+        summary_path = os.path.join(output_directory, "evaluation_summary.csv")
+        summary_df.to_csv(summary_path, index=False)
+        print(f"\nEvaluation complete. Summary saved to {summary_path}")
+        
+        # Print overall statistics
+        overall_tp = summary_df['true_positives'].sum()
+        overall_total = summary_df['total_points'].sum()
+        print("\nOverall Evaluation Results:")
+        print(f"Total ribcages processed: {len(summary_df)}")
+        print(f"Total endpoints evaluated: {overall_total}")
+        print(f"Overall true positive rate: {overall_tp/overall_total*100:.2f}% ({overall_tp}/{overall_total})")
+        
+        return summary_df
+    
+    return None
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Evaluate fracture endpoints from CSV against NIfTI labels')
-    parser.add_argument('--nifti', required=True, help='Path to the NIfTI label file')
-    parser.add_argument('--csv', required=True, help='Path to the CSV file with endpoint coordinates for a single ribcage')
+    parser = argparse.ArgumentParser(description='Evaluate fracture endpoints against NIfTI ground truth')
+    parser.add_argument('--csv-dir', help='Directory containing CSV files with endpoint coordinates', required=True)
+    parser.add_argument('--nifti-dir', help='Directory containing NIfTI label files', required=True)
     parser.add_argument('--threshold', type=float, default=5.0, 
-                        help='Maximum distance (mm) for a true positive (default: 5.0)')
-    parser.add_argument('--output', help='Path to save the evaluation results CSV')
-    parser.add_argument('--output-ply', help='Path to save visualization PLY file')
+                        help='Maximum distance (mm) for a true positive')
+    parser.add_argument('--output-dir', help='Directory to save evaluation results')
     
     args = parser.parse_args()
     
-    # Process a single ribcage
-    evaluate_single_ribcage(
-        args.nifti,
-        args.csv,
+    # Process directories with matching CSV and NIfTI files
+    process_directories(
+        args.csv_dir,
+        args.nifti_dir,
         distance_threshold=args.threshold,
-        output_path=args.output,
-        output_ply=args.output_ply
+        output_directory=args.output_dir
     )

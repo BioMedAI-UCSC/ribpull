@@ -1,89 +1,12 @@
-import numpy as np
+import argparse
+from pathlib import Path
+import csv
 from scipy.spatial import cKDTree
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-import argparse
-from pathlib import Path
+import numpy as np
 import pc_processor as pc
-import csv
-
-
-def export_endpoints_to_csv(points, combined_endpoints, component_labels, rib_numbers, output_csv):
-    """
-    Export the detected endpoints and their coordinates to a CSV file.
-    
-    Parameters:
-    points (np.array): The point cloud data
-    combined_endpoints (dict): Dictionary mapping component IDs to endpoint indices
-    component_labels (np.array): Array indicating which component each point belongs to
-    rib_numbers (dict): Dictionary mapping component IDs to rib designations
-    output_csv (str): Path to output CSV file
-    """
-    with open(output_csv, 'w', newline='') as csvfile:
-        fieldnames = ['point_index', 'x', 'y', 'z', 'component_id', 'rib_designation', 'detection_method']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        
-        # Write data for each endpoint
-        for component_id, endpoints_with_method in combined_endpoints.items():
-            rib_designation = rib_numbers.get(component_id, "Unassigned")
-            for endpoint_index, detection_method in endpoints_with_method:
-                x, y, z = points[endpoint_index]
-                writer.writerow({
-                    'point_index': int(endpoint_index),
-                    'x': float(x),
-                    'y': float(y),
-                    'z': float(z),
-                    'component_id': int(component_id),
-                    'rib_designation': rib_designation,
-                    'detection_method': detection_method
-                })
-    
-    print(f"Endpoint coordinates exported to {output_csv}")
-
-
-def detect_by_edge_similarity(points, edges):
-    """
-    Detect endpoints by finding points with small angles between edges (indicating
-    edges in similar directions) versus points with angles close to 180° (indicating
-    opposite directions).
-    """
-    endpoint_mask = np.zeros(len(points), dtype=bool)
-    angle_threshold = 100  # Threshold for angle similarity (in degrees)
-    for i in range(len(points)):
-        connected_edges = edges[np.any(edges == i, axis=1)]
-        if len(connected_edges) < 2:
-            continue
-        connected_verts = np.unique(connected_edges[connected_edges != i])
-        edge_vectors = points[connected_verts] - points[i]
-        edge_vectors = edge_vectors / np.linalg.norm(edge_vectors, axis=1)[:, np.newaxis]
-        is_endpoint = True
-        for j in range(len(edge_vectors)):
-            for k in range(j+1, len(edge_vectors)):
-                cos_angle = np.dot(edge_vectors[j], edge_vectors[k])
-                if cos_angle < np.cos(np.radians(angle_threshold)):  
-                    is_endpoint = False
-                    break
-            if not is_endpoint:
-                break
-        endpoint_mask[i] = is_endpoint
-    return endpoint_mask
-
-
-def construct_radius_connectivity(points, radius=None):
-    """Construct connectivity graph using radius-based neighbor search."""
-    if radius is None:
-        tree = cKDTree(points)
-        distances, _ = tree.query(points, k=3)
-        radius = np.mean(distances[:, 1]) * 2.35
-    print(f"Using radius: {radius}")
-    
-    tree = cKDTree(points)
-    pairs = list(tree.query_pairs(radius))
-    edges = np.array(pairs) if pairs else np.zeros((0, 2), dtype=int)
-    
-    return edges, radius
-
+import rib_segmentation as rs
 
 def detect_endpoints_by_density(points, box_size=None):
     """Detect endpoints by counting points within a local box neighborhood."""
@@ -113,6 +36,162 @@ def detect_endpoints_by_density(points, box_size=None):
             
     return endpoint_mask
 
+def detect_by_edge_similarity(points, edges):
+    """
+    Detect endpoints by finding points with small angles between edges (indicating
+    edges in similar directions) versus points with angles close to 180° (indicating
+    opposite directions).
+    """
+    endpoint_mask = np.zeros(len(points), dtype=bool)
+    angle_threshold = 100  # Threshold for angle similarity (in degrees)
+    for i in range(len(points)):
+        connected_edges = edges[np.any(edges == i, axis=1)]
+        if len(connected_edges) < 2:
+            continue
+        connected_verts = np.unique(connected_edges[connected_edges != i])
+        edge_vectors = points[connected_verts] - points[i]
+        edge_vectors = edge_vectors / np.linalg.norm(edge_vectors, axis=1)[:, np.newaxis]
+        is_endpoint = True
+        for j in range(len(edge_vectors)):
+            for k in range(j+1, len(edge_vectors)):
+                cos_angle = np.dot(edge_vectors[j], edge_vectors[k])
+                if cos_angle < np.cos(np.radians(angle_threshold)):  
+                    is_endpoint = False
+                    break
+            if not is_endpoint:
+                break
+        endpoint_mask[i] = is_endpoint
+    return endpoint_mask
+
+def identify_potential_fractures(points, combined_endpoints, xy_distance_threshold=10, z_distance_threshold=5):
+    """
+    Identify endpoints using both XY Euclidean distance and Z distance thresholds.
+    Keeps endpoints that have any other endpoint within both distance thresholds.
+    
+    Parameters:
+    points (np.array): The point cloud data
+    combined_endpoints (dict): Dictionary mapping component IDs to endpoint indices with detection methods
+    xy_distance_threshold (float): Maximum Euclidean distance in XY plane for endpoints to be considered neighbors
+    z_distance_threshold (float): Maximum distance in Z axis for endpoints to be considered neighbors
+    
+    Returns:
+    dict: Dictionary of filtered endpoints
+    """
+    import numpy as np
+    from scipy.spatial import cKDTree
+    
+    # Create a dictionary to store filtered endpoints
+    filtered_endpoints = {}
+    for component_id in combined_endpoints:
+        filtered_endpoints[component_id] = []
+    
+    # Extract all endpoint coordinates and their metadata
+    all_endpoints_data = []
+    for component_id, endpoints_with_method in combined_endpoints.items():
+        for endpoint_index, detection_method in endpoints_with_method:
+            coords = points[endpoint_index]
+            all_endpoints_data.append({
+                'component_id': component_id,
+                'endpoint_index': endpoint_index,
+                'detection_method': detection_method,
+                'coords': coords
+            })
+    
+    if not all_endpoints_data:
+        return filtered_endpoints
+    
+    # Create a KDTree for efficient spatial queries (using ONLY X,Y coordinates)
+    endpoint_coords = np.array([ep['coords'] for ep in all_endpoints_data])
+    endpoint_xy_coords = endpoint_coords[:, :2]  # Extract only X and Y coordinates
+    tree = cKDTree(endpoint_xy_coords)
+    
+    # Track which endpoints to keep
+    endpoints_to_keep = set()
+    
+    # Store pairs of neighboring endpoints for reporting
+    neighbor_pairs = []
+    
+    # Process each endpoint
+    for i, endpoint_data in enumerate(all_endpoints_data):
+        # Find all points within the XY distance threshold
+        # Returns indices of all points within xy_distance_threshold (including self)
+        xy_neighbors = tree.query_ball_point(endpoint_xy_coords[i], xy_distance_threshold)
+        
+        # Filter neighbors by Z distance
+        valid_neighbors = []
+        for neighbor_idx in xy_neighbors:
+            if neighbor_idx == i:  # Skip self
+                continue
+                
+            # Check Z distance
+            z_distance = abs(endpoint_coords[i][2] - endpoint_coords[neighbor_idx][2])
+            if z_distance <= z_distance_threshold:
+                valid_neighbors.append(neighbor_idx)
+        
+        # If this endpoint has any valid neighbors (close in both XY and Z), keep it
+        if valid_neighbors:
+            endpoints_to_keep.add(i)
+            
+            # Record neighbor pairs for reporting
+            for neighbor_idx in valid_neighbors:
+                pair = (min(i, neighbor_idx), max(i, neighbor_idx))  # Sort to avoid duplicates
+                if pair not in neighbor_pairs:
+                    neighbor_pairs.append(pair)
+                    endpoints_to_keep.add(neighbor_idx)  # Also keep the neighbor
+    
+    # Build the filtered endpoints dictionary
+    for i in endpoints_to_keep:
+        endpoint_data = all_endpoints_data[i]
+        component_id = endpoint_data['component_id']
+        endpoint_index = endpoint_data['endpoint_index']
+        detection_method = endpoint_data['detection_method']
+        
+        filtered_endpoints[component_id].append((endpoint_index, detection_method))
+    
+    # Print information about filtered endpoints
+    total_endpoints = sum(len(endpoints) for endpoints in combined_endpoints.values())
+    kept_endpoints = sum(len(endpoints) for endpoints in filtered_endpoints.values())
+    
+    print(f"Found {len(neighbor_pairs)} neighbor pairs involving {kept_endpoints} endpoints")
+    print(f"({kept_endpoints} out of {total_endpoints} total endpoints, {kept_endpoints/total_endpoints*100:.1f}%)")
+    print(f"Using XY threshold: {xy_distance_threshold}, Z threshold: {z_distance_threshold}")
+    
+    # Print details about a few sample neighbor pairs
+    print("\nSample neighbor pairs (up to 5):")
+    for idx, pair in enumerate(neighbor_pairs[:5]):  # Limit to first 5 pairs to avoid excessive output
+        ep1 = all_endpoints_data[pair[0]]
+        ep2 = all_endpoints_data[pair[1]]
+        coords1 = ep1['coords']
+        coords2 = ep2['coords']
+        # Calculate distances
+        xy_dist = np.linalg.norm(coords1[:2] - coords2[:2])
+        z_dist = abs(coords1[2] - coords2[2])
+        
+        print(f"  Pair {idx+1}:")
+        print(f"    Endpoint 1: Component {ep1['component_id']}, "
+              f"XYZ: ({coords1[0]:.2f}, {coords1[1]:.2f}, {coords1[2]:.2f})")
+        print(f"    Endpoint 2: Component {ep2['component_id']}, "
+              f"XYZ: ({coords2[0]:.2f}, {coords2[1]:.2f}, {coords2[2]:.2f})")
+        print(f"    XY Distance: {xy_dist:.2f}, Z Distance: {z_dist:.2f}")
+    
+    if len(neighbor_pairs) > 5:
+        print(f"  ... and {len(neighbor_pairs) - 5} more pairs")
+    
+    return filtered_endpoints
+
+def construct_radius_connectivity(points, radius=None):
+    """Construct connectivity graph using radius-based neighbor search."""
+    if radius is None:
+        tree = cKDTree(points)
+        distances, _ = tree.query(points, k=3)
+        radius = np.mean(distances[:, 1]) * 2.35
+    print(f"Using radius: {radius}")
+    
+    tree = cKDTree(points)
+    pairs = list(tree.query_pairs(radius))
+    edges = np.array(pairs) if pairs else np.zeros((0, 2), dtype=int)
+    
+    return edges, radius
 
 def identify_separate_skeletons(points, edges, n_points):
     """Identify separate skeleton components in the point cloud."""
@@ -164,164 +243,20 @@ def get_component_means(points, component_labels):
         
     return component_means
 
-
-def group_components_into_ribs(component_means, horizontal_threshold=20, vertical_threshold=10):
-    """Group components that likely belong to the same rib based on proximity."""
-    # Convert component_means to a list of tuples (component_id, coordinates)
-    # Convert numpy integers to regular integers here
-    components = [(int(comp_id), coords) for comp_id, coords in component_means.items()]
-    
-    # Sort components by y-coordinate (vertical position) and x-coordinate
-    sorted_components = sorted(components, key=lambda x: (x[1][1], x[1][0]))
-    
-    # Initialize rib groups
-    rib_groups = []
-    processed_components = set()
-    
-    # Group components that are close to each other
-    for i, (comp_id, coords) in enumerate(sorted_components):
-        if comp_id in processed_components:
-            continue
-            
-        current_group = [comp_id]  # Now using regular integer
-        processed_components.add(comp_id)
-        
-        # Check remaining components for proximity
-        for j, (other_id, other_coords) in enumerate(sorted_components[i+1:], i+1):
-            if other_id in processed_components:
-                continue
-                
-            # Calculate horizontal and vertical distances
-            horizontal_dist = abs(coords[0] - other_coords[0])
-            vertical_dist = abs(coords[1] - other_coords[1])
-            
-            if horizontal_dist < horizontal_threshold and vertical_dist < vertical_threshold:
-                current_group.append(other_id)  # Now using regular integer
-                processed_components.add(other_id)
-        
-        rib_groups.append(current_group)
-    
-    return rib_groups
-
-
-def assign_rib_numbers(rib_groups, component_means):
-    """
-    Assign rib numbers enforcing exactly 12 ribs on each side.
-    Will merge or split groups as needed to achieve this.
-    """
-    # Calculate mean position for each rib group
-    rib_positions = []
-    for i, group in enumerate(rib_groups):
-        if not group:  # Skip empty groups
-            continue
-        group_coords = np.mean([component_means[comp_id] for comp_id in group], axis=0)
-        rib_positions.append((i, group_coords))
-    
-    if not rib_positions:  # Handle case where all groups are empty
-        return {}
-    
-    # Split into left and right sides based on x-coordinate
-    median_x = np.median([pos[1][0] for pos in rib_positions])
-    left_positions = [(idx, pos) for idx, pos in rib_positions if pos[0] < median_x]
-    right_positions = [(idx, pos) for idx, pos in rib_positions if pos[0] >= median_x]
-    
-    def adjust_to_12_ribs(positions, side):
-        """Adjust number of groups to exactly 12 ribs."""
-        # Sort by Y coordinate
-        sorted_positions = sorted(positions, key=lambda x: x[1][1])
-        
-        if len(sorted_positions) > 12:
-            # If we have too many groups, merge closest ones
-            while len(sorted_positions) > 12:
-                # Find closest pair by Y coordinate
-                min_dist = float('inf')
-                merge_idx = 0
-                for i in range(len(sorted_positions) - 1):
-                    dist = abs(sorted_positions[i][1][1] - sorted_positions[i + 1][1][1])
-                    if dist < min_dist:
-                        min_dist = dist
-                        merge_idx = i
-                
-                # Merge the groups
-                group1_idx = sorted_positions[merge_idx][0]
-                group2_idx = sorted_positions[merge_idx + 1][0]
-                rib_groups[group1_idx].extend(rib_groups[group2_idx])
-                # Update mean position
-                new_mean = np.mean([component_means[comp_id] for comp_id in rib_groups[group1_idx]], axis=0)
-                
-                # Remove the merged group and update positions
-                sorted_positions.pop(merge_idx + 1)
-                sorted_positions[merge_idx] = (group1_idx, new_mean)
-        
-        elif len(sorted_positions) < 12:
-            # If we have too few groups, split largest gaps
-            sorted_positions = sorted(sorted_positions, key=lambda x: x[1][1])
-            while len(sorted_positions) < 12:
-                # Find largest gap in Y coordinates
-                max_gap = 0
-                split_idx = 0
-                for i in range(len(sorted_positions) - 1):
-                    gap = abs(sorted_positions[i + 1][1][1] - sorted_positions[i][1][1])
-                    if gap > max_gap:
-                        max_gap = gap
-                        split_idx = i
-                
-                # Create a new empty group at the midpoint
-                mid_y = (sorted_positions[split_idx][1][1] + sorted_positions[split_idx + 1][1][1]) / 2
-                mid_x = sorted_positions[split_idx][1][0]  # Keep same x coordinate
-                mid_z = (sorted_positions[split_idx][1][2] + sorted_positions[split_idx + 1][1][2]) / 2
-                new_pos = np.array([mid_x, mid_y, mid_z])
-                
-                # Add new empty group
-                rib_groups.append([])
-                new_group_idx = len(rib_groups) - 1
-                sorted_positions.insert(split_idx + 1, (new_group_idx, new_pos))
-        
-        return sorted_positions
-    
-    # Adjust both sides to exactly 12 ribs
-    left_positions = adjust_to_12_ribs(left_positions, 'left')
-    right_positions = adjust_to_12_ribs(right_positions, 'right')
-    
-    # Assign rib numbers
-    rib_numbers = {}
-    
-    # Left side: 1-12 from top to bottom
-    for i, (group_idx, _) in enumerate(sorted(left_positions, key=lambda x: x[1][1])):
-        rib_num = i + 1
-        for comp_id in rib_groups[group_idx]:
-            rib_numbers[int(comp_id)] = f"L{rib_num}"
-    
-    # Right side: 1-12 from top to bottom (changed from previous bottom-to-top)
-    for i, (group_idx, _) in enumerate(sorted(right_positions, key=lambda x: x[1][1])):
-        rib_num = i + 1
-        for comp_id in rib_groups[group_idx]:
-            rib_numbers[int(comp_id)] = f"R{rib_num}"
-    
-    return rib_numbers
-
-
 def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
     points = pc.load_skeleton_file(input_file)
     edges, used_radius = construct_radius_connectivity(points, radius)
     
+    # From components to rib labels
     n_components, component_labels = identify_separate_skeletons(points, edges, len(points))
-    
-    # Get component means
     component_means = get_component_means(points, component_labels)
-    
-    # Group components into ribs
-    rib_groups = group_components_into_ribs(component_means)
-    
-    # Assign rib numbers
-    rib_numbers = assign_rib_numbers(rib_groups, component_means)
+    rib_groups = rs.group_components_into_ribs(component_means)
+    rib_numbers = rs.assign_rib_numbers(rib_groups, component_means)
     
     # Get endpoints from all methods
     connectivity_endpoints, connections = find_endpoints_per_skeleton(edges, len(points), component_labels)
     density_endpoints = detect_endpoints_by_density(points)
     edge_similarity_endpoints = detect_by_edge_similarity(points, edges)
-    
-    # Track detection counts
     method_counts = {
         'connectivity': 0,
         'density': 0,
@@ -350,15 +285,17 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
                 method_counts[method_name] += 1
         
         combined_endpoints[component] = endpoints_with_method
+
+    potential_fracture_endpoints = identify_potential_fractures(points, combined_endpoints)
     
-    # Create visualization file
-    pc.create_visualization_obj(points, edges, combined_endpoints, output_obj)
+    # Create visualization file - MODIFY THIS TO USE potential_fracture_endpoints
+    pc.create_visualization_obj(points, edges, potential_fracture_endpoints, output_obj)
     
     # Create CSV output filename from output_obj path
     output_csv = output_obj.rsplit('.', 1)[0] + '_coordinates.csv'
     
-    # Export endpoints to CSV
-    export_endpoints_to_csv(points, combined_endpoints, component_labels, rib_numbers, output_csv)
+    # Export endpoints to CSV - MODIFY THIS TO USE potential_fracture_endpoints
+    export_endpoints_to_csv(points, potential_fracture_endpoints, component_labels, rib_numbers, output_csv)
     
     # Sort components by rib number
     def get_rib_sort_key(item):
@@ -372,15 +309,15 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
                              key=get_rib_sort_key)
     
     # Print sorted component information
-    print("\nComponent Analysis:")
-    for component in range(n_components):
-        mean_coords = component_means[component]
-        rib_id = rib_numbers.get(component, "Unassigned")
-        print(f"Component {component} (Rib {rib_id}):")
-        print(f"  Mean coordinates: X={mean_coords[0]:.2f}, Y={mean_coords[1]:.2f}, Z={mean_coords[2]:.2f}")
+    # print("\nComponent Analysis:")
+    # for component in range(n_components):
+    #    mean_coords = component_means[component]
+    #    rib_id = rib_numbers.get(component, "Unassigned")
+    #    print(f"Component {component} (Rib {rib_id}):")
+    #    print(f"  Mean coordinates: X={mean_coords[0]:.2f}, Y={mean_coords[1]:.2f}, Z={mean_coords[2]:.2f}")
     
     # Print sorted rib grouping information
-    print("\nRib Groups:")
+    # print("\nRib Groups:")
     # Create a dictionary to group components by rib ID
     rib_to_components = {}
     for group in rib_groups:
@@ -390,20 +327,53 @@ def analyze_and_visualize_skeleton(input_file, output_obj, radius=None):
         rib_to_components[rib_id] = group
     
     # Create list of all possible rib IDs
-    all_rib_ids = ([f"R{i}" for i in range(1, 13)] + 
-                   [f"L{i}" for i in range(1, 13)])
+    # all_rib_ids = ([f"R{i}" for i in range(1, 13)] + 
+    #              [f"L{i}" for i in range(1, 13)])
     
     # Print all ribs in order
-    for rib_id in all_rib_ids:
-        if rib_id in rib_to_components:
-            group = rib_to_components[rib_id]
-            print(f"Rib {rib_id}: Components {sorted(group)}")
-            if len(group) > 1:
-                print("  Potential fracture detected (multiple components)")
-        else:
-            print(f"Rib {rib_id}: No components (empty)")
+    # for rib_id in all_rib_ids:
+    #    if rib_id in rib_to_components:
+    #        group = rib_to_components[rib_id]
+    #        print(f"Rib {rib_id}: Components {sorted(group)}")
+    #        if len(group) > 1:
+    #            print("  Potential fracture detected (multiple components)")
+    #    else:
+    #        print(f"Rib {rib_id}: No components (empty)")
     
     return n_components, combined_endpoints, rib_numbers, rib_groups
+
+def export_endpoints_to_csv(points, combined_endpoints, component_labels, rib_numbers, output_csv):
+    """
+    Export the detected endpoints and their coordinates to a CSV file.
+    
+    Parameters:
+    points (np.array): The point cloud data
+    combined_endpoints (dict): Dictionary mapping component IDs to endpoint indices
+    component_labels (np.array): Array indicating which component each point belongs to
+    rib_numbers (dict): Dictionary mapping component IDs to rib designations
+    output_csv (str): Path to output CSV file
+    """
+    with open(output_csv, 'w', newline='') as csvfile:
+        fieldnames = ['point_index', 'x', 'y', 'z', 'component_id', 'rib_designation', 'detection_method']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        # Write data for each endpoint
+        for component_id, endpoints_with_method in combined_endpoints.items():
+            rib_designation = rib_numbers.get(component_id, "Unassigned")
+            for endpoint_index, detection_method in endpoints_with_method:
+                x, y, z = points[endpoint_index]
+                writer.writerow({
+                    'point_index': int(endpoint_index),
+                    'x': float(x),
+                    'y': float(y),
+                    'z': float(z),
+                    'component_id': int(component_id),
+                    'rib_designation': rib_designation,
+                    'detection_method': detection_method
+                })
+    
+    print(f"Endpoint coordinates exported to {output_csv}")
 
 
 def process_directory(directory_path, radius=None):
@@ -411,7 +381,7 @@ def process_directory(directory_path, radius=None):
     directory = Path(directory_path)
     results = {}
     
-    output_dir = directory / "endpoint_analysis"
+    output_dir = directory / "endpoint_filtered_analysis"
     output_dir.mkdir(exist_ok=True)
     
     skeleton_files = list(directory.glob("*.obj")) + list(directory.glob("*.xyz"))
