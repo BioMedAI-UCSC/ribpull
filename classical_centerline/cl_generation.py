@@ -72,8 +72,8 @@ def dilation(vol_ct,vol_rib):
     return res
 
 
-dir_pred = '../TMI_metrics/metrics/label/'
-dir_ct = '../TMI_metrics/dataset/ct_binary/'
+dir_pred = '../../RibSeg/inference_res_compressed/'
+dir_ct = '../../RibSeg/data/pn/data_pn/test/'
 dir_save = './cl_upsample/'
 if not os.path.exists(dir_save):
     os.makedirs(dir_save)
