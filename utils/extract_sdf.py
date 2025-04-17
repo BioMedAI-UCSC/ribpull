@@ -6,7 +6,7 @@ import trimesh
 import numpy as np
 import denoise_pc
 
-def create_extrapolated_volume(points, labels, volume_shape, spacing=None, radius=3.0):
+def create_extrapolated_volume(points, labels, volume_shape, radius, spacing=None):
     """
     Create a volume by extrapolating from labeled points using distance-weighted influence.
     
@@ -127,11 +127,9 @@ def remove_small_components(binary_volume, min_size=100):
         print("No small components to remove")
         return binary_volume
 
-def process_ct_scan(points, labels, volume_shape=None, spacing=None, 
-                    influence_radius=3.0, closing_kernel_size=3,
-                    threshold=0.5, smooth_sigma=1.0,
-                    dbscan_eps=0.15, dbscan_min_samples=20,
-                    min_component_size=100):
+def process_ct_scan(points, labels, volume_shape, influence_radius, threshold, 
+                    smooth_sigma,dbscan_eps, dbscan_min_samples,
+                    min_component_size, spacing=None, closing_kernel_size=3):
     """
     Process labeled CT scan points to SDF using extrapolation.
     
@@ -171,7 +169,7 @@ def process_ct_scan(points, labels, volume_shape=None, spacing=None,
     # Create probability volume by extrapolation
     print("Creating extrapolated probability volume...")
     prob_volume = create_extrapolated_volume(
-        points, labels, volume_shape, spacing, radius=influence_radius
+        points, labels, volume_shape, influence_radius, spacing
     )
     
     # Apply morphological closing to get final binary volume
@@ -314,7 +312,7 @@ def main():
     parser.add_argument('--closing_size', type=int, default=3, help='Kernel size for morphological closing')
     parser.add_argument('--smooth_sigma', type=float, default=0.3, help='Gaussian smoothing sigma (0 for none)')
     parser.add_argument('--dbscan_eps', type=float, default=10.0, help='DBSCAN epsilon for denoising')
-    parser.add_argument('--dbscan_min_samples', type=int, default=5, help='DBSCAN min samples')
+    parser.add_argument('--dbscan_min_samples', type=int, default=25, help='DBSCAN min samples')
     parser.add_argument('--min_component_size', type=int, default=100, help='Minimum size for connected components')
     parser.add_argument('--save_isosurface', action='store_true', help='Save isosurface as PLY mesh')
     
