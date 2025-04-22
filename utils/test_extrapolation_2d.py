@@ -5,50 +5,32 @@ from scipy.ndimage import distance_transform_edt, gaussian_filter, binary_closin
 import sys
 import os
 
-# Add the directory containing your main code to the Python path
-# Assuming the main code is in the same directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-try:
-    # Try direct import first
-    from extract_sdf import create_extrapolated_volume, remove_small_components
-except ImportError:
-    # If that fails, try importing the module and accessing the functions
-    try:
-        import extract_sdf
-        create_extrapolated_volume = extract_sdf.create_extrapolated_volume
-        remove_small_components = extract_sdf.remove_small_components
-        print("Successfully imported functions via module")
-    except (ImportError, AttributeError) as e:
-        print(f"Error importing functions from extract_sdf.py: {e}")
-        print("Make sure the file exists and functions are defined correctly.")
-        sys.exit(1)
+from extract_sdf import create_extrapolated_volume, remove_small_components
 
-def create_2d_toy_dataset(grid_size=100, num_points=100, shape_type='circle', noise_level=0.1, random_seed=42):
+def create_2d_toy_dataset(grid_size=100, num_points=100, shape_type='ribs', noise_level=0.1, random_seed=42):
     """
-    Create a 2D toy dataset with labeled points.
-    
     Args:
         grid_size: Size of the 2D grid (grid_size x grid_size)
         num_points: Number of points to generate
         shape_type: 'circle' or 'rectangle'
         noise_level: Level of noise to add (0.0 to 1.0)
         random_seed: Random seed for reproducibility
-        
+
     Returns:
         points: Nx2 array of coordinates
         labels: N-length array with 1 for foreground, 0 for background
         ground_truth: Binary grid representing the true shape
     """
-    np.random.seed(random_seed)
+    #np.random.seed(random_seed)
     
     # Create empty grid for ground truth
     ground_truth = np.zeros((grid_size, grid_size), dtype=bool)
     
     # Create shape
     center = grid_size // 2
-    radius = grid_size // 4
-    
+    radius = grid_size // 4    
     if shape_type == 'circle':
         y, x = np.ogrid[:grid_size, :grid_size]
         dist_from_center = np.sqrt((x - center)**2 + (y - center)**2)
@@ -57,51 +39,115 @@ def create_2d_toy_dataset(grid_size=100, num_points=100, shape_type='circle', no
         start_x, end_x = center - radius, center + radius
         start_y, end_y = center - radius, center + radius
         ground_truth[start_y:end_y, start_x:end_x] = True
+    elif shape_type == 'ribs':
+        # Create two ellipsoid shapes like ribs, rotated along z-axis
+        y, x = np.ogrid[:grid_size, :grid_size]
+        
+        # Parameters for the ellipsoids
+        a, b = radius * 0.7, radius * 0.25  # Semi-major and semi-minor axes
+        offset = radius * 1.2  # Offset from center
+        rotation_angle = np.pi/6  # 30 degrees rotation
+        
+        # Function to rotate points
+        def rotate_point(x, y, cx, cy, angle):
+            # Translate point to origin
+            x_t = x - cx
+            y_t = y - cy
+            
+            # Rotate point
+            x_r = x_t * np.cos(angle) - y_t * np.sin(angle)
+            y_r = x_t * np.sin(angle) + y_t * np.cos(angle)
+            
+            # Translate back
+            return x_r + cx, y_r + cy
+        
+        # Create meshgrid for easier calculations
+        xx, yy = np.meshgrid(np.arange(grid_size), np.arange(grid_size))
+        
+        # Left rib (rotated clockwise)
+        left_x = center - offset/2
+        left_y = center
+        
+        # Rotate points
+        left_xx, left_yy = rotate_point(xx, yy, left_x, left_y, rotation_angle)
+        
+        # Create left ellipsoid equation
+        left_ellipse = (((left_xx - left_x)**2 / a**2) + 
+                        ((left_yy - left_y)**2 / b**2)) <= 1.0
+        
+        # Right rib (rotated counter-clockwise)
+        right_x = center + offset/2
+        right_y = center
+        
+        # Rotate points
+        right_xx, right_yy = rotate_point(xx, yy, right_x, right_y, -rotation_angle)
+        
+        # Create right ellipsoid equation
+        right_ellipse = (((right_xx - right_x)**2 / a**2) + 
+                         ((right_yy - right_y)**2 / b**2)) <= 1.0
+        
+        # Combine the two ellipsoids (ensure no overlap)
+        ground_truth = left_ellipse | right_ellipse
+        
+        # Check for overlap and adjust if needed
+        if np.any(left_ellipse & right_ellipse):
+            print("Warning: Ellipsoids overlap - adjusting offset")
+            ground_truth = np.zeros_like(ground_truth)
+            
+            # Try increasing offset until no overlap
+            while np.any(left_ellipse & right_ellipse):
+                offset *= 1.1
+                
+                # Recalculate positions
+                left_x = center - offset/2
+                right_x = center + offset/2
+                
+                # Rotate points
+                left_xx, left_yy = rotate_point(xx, yy, left_x, left_y, rotation_angle)
+                right_xx, right_yy = rotate_point(xx, yy, right_x, right_y, -rotation_angle)
+                
+                # Recalculate ellipses
+                left_ellipse = (((left_xx - left_x)**2 / a**2) + 
+                                ((left_yy - left_y)**2 / b**2)) <= 1.0
+                right_ellipse = (((right_xx - right_x)**2 / a**2) + 
+                                 ((right_yy - right_y)**2 / b**2)) <= 1.0
+            
+            ground_truth = left_ellipse | right_ellipse
     else:
         raise ValueError(f"Unknown shape type: {shape_type}")
-    
-    # Generate points
+
     # Sample from the foreground with some background points
-    foreground_ratio = 0.9  # 90% foreground points, 10% background
+    foreground_ratio = 0.9  
     num_foreground = int(num_points * foreground_ratio)
     num_background = num_points - num_foreground
     
-    # Generate foreground points
+    # Generate foreground & background points and combine
     fg_indices = np.where(ground_truth)
     fg_indices = np.array(fg_indices).T
     fg_indices_sample = fg_indices[np.random.choice(len(fg_indices), num_foreground, replace=True)]
-    
-    # Generate background points
     bg_indices = np.where(~ground_truth)
     bg_indices = np.array(bg_indices).T
     bg_indices_sample = bg_indices[np.random.choice(len(bg_indices), num_background, replace=True)]
-    
-    # Combine all points
-    points = np.vstack([fg_indices_sample, bg_indices_sample])
+    points = np.vstack([fg_indices_sample, bg_indices_sample]) # combines background and foreground
     
     # Create labels (1 for foreground, 0 for background)
     labels = np.zeros(num_points, dtype=int)
     labels[:num_foreground] = 1
     
-    # Shuffle points and labels
+    # Shuffle points and labels and add noise
     shuffle_idx = np.random.permutation(num_points)
     points = points[shuffle_idx]
     labels = labels[shuffle_idx]
+    noise = np.random.normal(0, noise_level * radius, points.shape)
+    points = points + noise
     
-    # Add noise to points
-    if noise_level > 0:
-        noise = np.random.normal(0, noise_level * radius, points.shape)
-        points = points + noise
-        
-        # Clamp points to grid boundaries
-        points = np.clip(points, 0, grid_size - 1)
+    # Clamp points to grid boundaries
+    points = np.clip(points, 0, grid_size - 1)
     
     return points, labels, ground_truth
 
 def create_extrapolated_volume_2d(points, labels, volume_shape, radius):
     """
-    2D version of create_extrapolated_volume function.
-    
     Args:
         points: Nx2 array of coordinates
         labels: N-length array with 1 for foreground, 0 for background
@@ -218,33 +264,18 @@ def process_2d_point_cloud(points, labels, grid_shape, influence_radius, thresho
     Returns:
         SDF as numpy array, binary grid, and probability grid
     """
-    # Create probability grid by extrapolation
     print("Creating extrapolated probability grid...")
     prob_grid = create_extrapolated_volume_2d(
         points, labels, grid_shape, influence_radius
     )
-    
-    # Apply morphological closing to get final binary grid
     print("Applying morphological closing...")
     binary_grid = prob_grid > threshold
     if closing_kernel_size > 0:
         kernel = np.ones((closing_kernel_size, closing_kernel_size))
         binary_grid = binary_closing(binary_grid, structure=kernel)
-    
-    # Remove small disconnected components
     print("Removing small disconnected components...")
     binary_grid = remove_small_components_2d(binary_grid, min_size=min_component_size)
-    
-    # Compute SDF
-    print("Computing SDF...")
-    if np.sum(binary_grid) == 0:
-        print("Warning: Empty binary grid - SDF calculation may be meaningless")
-        return np.ones(binary_grid.shape), binary_grid, prob_grid
-    
-    if np.all(binary_grid):
-        print("Warning: Full binary grid - SDF calculation may be meaningless")
-        return -np.ones(binary_grid.shape), binary_grid, prob_grid
-    
+    print("Computing SDF...")    
     print("Ensuring hollow structure...")
     # Erode by 2 pixels to remove interior
     core = binary_erosion(binary_grid, iterations=2)
@@ -256,10 +287,8 @@ def process_2d_point_cloud(points, labels, grid_shape, influence_radius, thresho
     inside_distance = distance_transform_edt(hollow_grid)
     sdf = outside_distance - inside_distance
     
-    # Apply Gaussian smoothing if needed
-    if smooth_sigma > 0:
-        print(f"Applying Gaussian smoothing with sigma={smooth_sigma}")
-        sdf = gaussian_filter(sdf, sigma=smooth_sigma)
+    print(f"Applying Gaussian smoothing with sigma={smooth_sigma}")
+    sdf = gaussian_filter(sdf, sigma=smooth_sigma)
     
     return sdf, binary_grid, prob_grid
 
@@ -338,7 +367,7 @@ def main():
     points, labels, ground_truth = create_2d_toy_dataset(
         grid_size=grid_size, 
         num_points=num_points, 
-        shape_type='circle',
+        shape_type='ribs',
         noise_level=0.1
     )
     
@@ -352,12 +381,8 @@ def main():
         smooth_sigma=smooth_sigma,
         min_component_size=min_component_size
     )
-    
-    # Visualize the results
-    visualize_results(points, labels, ground_truth, prob_grid, binary_grid, sdf, influence_radius)
 
-    
-    # Print some statistics
+    visualize_results(points, labels, ground_truth, prob_grid, binary_grid, sdf, influence_radius)
     print(f"SDF shape: {sdf.shape}")
     print(f"Min SDF value: {np.min(sdf)}, Max SDF value: {np.max(sdf)}")
     print(f"Binary grid: {np.sum(binary_grid)} foreground pixels out of {binary_grid.size}")
@@ -371,15 +396,10 @@ def main():
     # Test with the original function by creating a 1-slice 3D volume
     grid_shape_3d = (grid_size, grid_size, 1)
     try:
-        # Call the original function from your imported module
-        prob_volume_3d = create_extrapolated_volume(
-            points_3d, labels, grid_shape_3d, influence_radius
-        )
+        prob_volume_3d = create_extrapolated_volume(points_3d, labels, grid_shape_3d, influence_radius)
         
-        # Extract the 2D slice
+        # Extract the 2D slice and compare 2D and 3D function results
         prob_grid_3d = prob_volume_3d[:, :, 0]
-        
-        # Compare the results
         mse = np.mean((prob_grid - prob_grid_3d)**2)
         print(f"MSE between 2D and 3D implementation: {mse}")
         if mse < 1e-10:
@@ -387,7 +407,6 @@ def main():
         else:
             print("There are some differences between the 2D and 3D implementations.")
             
-        # Save the comparison without displaying
         fig, axes = plt.subplots(1, 2, figsize=(12, 6))
         im1 = axes[0].imshow(prob_grid, cmap='viridis')
         axes[0].set_title('2D Implementation')
