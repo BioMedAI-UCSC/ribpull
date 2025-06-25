@@ -76,114 +76,67 @@ def build_neural_skeleton(pc1, nc1, tv=True, activation="Sine", npl=64, dep=6, h
     tinit = time.time()
     
     if trainednet is not None:
-        # Load checkpoint
+        # Load pre-trained model
         checkpoint = torch.load(trainednet, map_location=device)
         
-        # Create network with 8 layers (lin0-lin7) + manual lin8
-        net = NPullNetwork(d_in=3, d_out=256, d_hidden=256, n_layers=8, skip_in=(4,), weight_norm=True, geometric_init=False).to(device)
+        # Create network architecture matching the saved model
+        net = NPullNetwork(d_in=3, d_out=256, d_hidden=256, n_layers=8, skip_in=(4,), 
+                          weight_norm=True, geometric_init=False).to(device)
         
-        # Add final layer manually
+        # Add final output layer
         lin8 = nn.Linear(256, 2)
         setattr(net, "lin8", lin8)
         
-        # Let's test different skip connection interpretations
-        def test_architecture():
-            test_input = torch.randn(1, 3).to(device)
-            x = test_input
-            
-            print("Testing architecture step by step:")
-            print(f"Input: {x.shape}")
-            
-            # Test what happens if we follow the exact layer dimensions
-            try:
-                # lin0: 3 -> 256
-                x = torch.randn(1, 256).to(device)  # Simulate lin0 output
-                print(f"After lin0: {x.shape}")
-                
-                # lin1: 256 -> 256  
-                # lin2: 256 -> 256
-                # These are straightforward
-                
-                # lin3: expects 256 input, outputs 253
-                # This suggests lin3 is the "reduced" layer due to upcoming skip connection
-                lin3_out = torch.randn(1, 253).to(device)
-                print(f"After lin3 (reduced): {lin3_out.shape}")
-                
-                # Now add skip connection: 253 + 3 = 256
-                skip_result = torch.cat([lin3_out, test_input], dim=1)
-                print(f"After skip connection: {skip_result.shape}")
-                
-                # lin4: 256 -> 256 (this matches the saved weights)
-                print("This matches the saved model dimensions!")
-                return True
-                
-            except Exception as e:
-                print(f"Test failed: {e}")
-                return False
-        
-        if test_architecture():
-            print("Architecture understanding confirmed!")
-        
-        # Create the correct forward pass based on this understanding
+        # Custom forward pass for pre-trained model with skip connections
         def forward(inputs):
-            # Handle both 2D and 3D inputs by flattening if necessary
+            # Handle both 2D and 3D inputs
             original_shape = inputs.shape
             if len(inputs.shape) == 3:
-                # Flatten 3D input [batch1, batch2, 3] -> [batch1*batch2, 3]
                 inputs = inputs.reshape(-1, inputs.shape[-1])
             
             x = inputs * net.scale
             original_inputs = x
             
-            # Process layers following the saved model's exact architecture
+            # Standard layers
             x = net.lin0(x)  # 3 -> 256
             x = net.activation(x)
-            
             x = net.lin1(x)  # 256 -> 256
             x = net.activation(x)
-            
             x = net.lin2(x)  # 256 -> 256
             x = net.activation(x)
             
-            # lin3 is the "skip layer" - it reduces dimension to make room for skip connection
+            # Skip connection layer: reduce then concatenate
             x = net.lin3(x)  # 256 -> 253
-            # Now add the skip connection
             x = torch.cat([x, original_inputs], dim=1) / np.sqrt(2)  # 253 + 3 -> 256
             x = net.activation(x)
             
-            # Continue with remaining layers
-            x = net.lin4(x)  # 256 -> 256
+            # Remaining layers
+            x = net.lin4(x)
             x = net.activation(x)
-            
-            x = net.lin5(x)  # 256 -> 256
+            x = net.lin5(x)
             x = net.activation(x)
-            
-            x = net.lin6(x)  # 256 -> 256
+            x = net.lin6(x)
             x = net.activation(x)
-            
-            x = net.lin7(x)  # 256 -> 256
+            x = net.lin7(x)
             x = net.activation(x)
-            
             x = net.lin8(x)  # 256 -> 2
             
-            result = x[:, :1] / net.scale
+            result = x[:, :1] / net.scale  # Return SDF component only
             
-            # Reshape back to original shape if input was 3D
+            # Reshape back if input was 3D
             if len(original_shape) == 3:
                 result = result.reshape(original_shape[0], original_shape[1], 1)
             
             return result
         
-        # Replace forward method
         net.forward = forward
-        
-        # Load weights
         net.load_state_dict(checkpoint, strict=False)
-        print("Model loaded successfully!")
+        print("Pre-trained model loaded successfully!")
         
     else:
-        # Original training path
+        # Train new model from scratch
         pc, nc = torch.tensor(pc1, device=device).float(), torch.tensor(nc1, device=device).float()
+        
         if scaleshape:
             pc, center, scale = center_bounding_box(pc)
         else:
@@ -193,30 +146,30 @@ def build_neural_skeleton(pc1, nc1, tv=True, activation="Sine", npl=64, dep=6, h
         
         net = torch.load("Pretrained/pretrained_{}_{}_{}.net".format(npl, dep, activation))
         
-        print("\n##### Optimizing the neural sdf ({},{})".format(activation, "TV" if tv else "No TV"))
+        print("\n##### Optimizing neural SDF ({},{})".format(activation, "TV" if tv else "No TV"))
+        
+        # Set optimizer and training parameters based on activation
         if activation == "Sine":
             optim = torch.optim.LBFGS(params=net.parameters())
-            nepochs = 50
-            nhints_ends = 20
+            nepochs, nhints_ends = 50, 20
         elif activation == "ReLU":
             optim = torch.optim.Adam(params=net.parameters(), lr=2e-5)
-            nepochs = 20000
-            nhints_ends = 10000
+            nepochs, nhints_ends = 20000, 10000
         elif activation == "SoftPlus":
             optim = torch.optim.Adam(params=net.parameters(), lr=1e-3)
-            nepochs = 20000
-            nhints_ends = 10000
+            nepochs, nhints_ends = 20000, 10000
         
         t = time.time()
         try:
             optimize_neural_sdf(net, optim, pc, nc, batch_size=25000, pc_batch_size=25000, 
                                 epochs=nepochs, tv_ends=nepochs if tv else 0, hints_ends=nhints_ends,
-                                lambda_pc=lambda_pc, lambda_eik=lambda_eik, lambda_hint=lambda_hint, lambda_tv=lambda_tv,
-                                nb_hints=hints, plot_loss=False)
+                                lambda_pc=lambda_pc, lambda_eik=lambda_eik, lambda_hint=lambda_hint, 
+                                lambda_tv=lambda_tv, nb_hints=hints, plot_loss=False)
         except KeyboardInterrupt:
             pass
-        print("Optimizing NN took", '{:.2f}'.format(time.time()-t), "s.")
+        print("Neural SDF optimization completed in {:.2f}s".format(time.time()-t))
     
+    # Extract skeleton from neural SDF
     print("\n##### Computing neural coverage skeleton")
     tskel = time.time()
     
@@ -227,20 +180,19 @@ def build_neural_skeleton(pc1, nc1, tv=True, activation="Sine", npl=64, dep=6, h
         samples = uniform_resampling(net, samples, 100, K=3, alpha=.1*np.sqrt(D/number), sigma=16*D/number)
 
     sk = sample_skeleton_gpu(net, samples, res=50, length=1, steps=1, div=100)
-    
-    print("Extracting skeletal points candidates", time.time()-tskel)
-    
     candidates = neural_candidates(sk, reduce_radius=0.01)
     cvskpts, edges, triangles = coverage_skeleton(candidates, samples, delta=delta, factor=scaling, time_limit=time_limit)
 
-    print("Coverage skeleton obtained in", '{:.2f}'.format(time.time()-tskel), " s.") 
+    print("Coverage skeleton obtained in {:.2f}s".format(time.time()-tskel))
 
-    # Handle scaling for loaded vs trained models
+    # Handle coordinate scaling
     if trainednet is not None:
+        # Pre-trained model: no scaling needed
         skpts = candidates.cpu().numpy()
         upts = samples.detach().cpu().numpy()
         cvskpts_final = cvskpts
     else:
+        # Trained model: apply inverse scaling
         skpts = candidates.cpu().numpy() * scale.cpu().numpy() + center.cpu().numpy()
         upts = samples.detach().cpu().numpy() * scale.cpu().numpy() + center.cpu().numpy()
         if cvskpts.shape[0] > 0:
@@ -248,11 +200,11 @@ def build_neural_skeleton(pc1, nc1, tv=True, activation="Sine", npl=64, dep=6, h
         else:
             cvskpts_final = cvskpts
 
-    print("Total computation time", '{:.2f}'.format(time.time()-tinit), " s.")
+    print("Total computation time: {:.2f}s".format(time.time()-tinit))
 
     if cvskpts_final.shape[0] == 0:
-        print("Infeasible problem no skeleton found, try tweaking the parameters")
+        print("Warning: No skeleton found. Try adjusting parameters.")
     else:
-        print("Coverage skeleton built successfully")
+        print("Skeleton extraction completed successfully!")
 
     return cvskpts_final, edges, triangles, net, skpts, upts
