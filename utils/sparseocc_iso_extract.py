@@ -4,6 +4,8 @@ from skimage import measure
 import trimesh
 from models import NPullNetwork
 import utils
+from datetime import datetime
+
 
 def load_trained_model(model_path, config_path):
     device = 'cpu'
@@ -250,9 +252,10 @@ def generate_mesh(model_path, config_path, output_path, bounds=(-1.5, 1.5),
 
 if __name__ == "__main__":
     # Configuration
-    model_path = "meshes/model_20000.pth"
+    model_path = "../isr/experiments/output/model_20000.pth"
     config_path = "configs/ribcage.conf"
-    output_path = "high_res_ribcage.obj"
+    current_date = datetime.now().strftime("%d%m%Y")
+    output_path = f"high_res_ribcage_{current_date}.obj"
     
     # Generate high-resolution mesh
     mesh = generate_mesh(

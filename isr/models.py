@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
-import trimesh
 
 class NPullNetwork(nn.Module):
     def __init__(self,

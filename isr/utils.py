@@ -5,7 +5,6 @@ import trimesh
 import torch.nn.functional as F
 import math
 import random
-import secrets
 from scipy.spatial import cKDTree
 import mcubes
 from pyhocon import ConfigFactory
@@ -14,6 +13,7 @@ import napf
 from scipy.spatial import cKDTree as KDTree
 import torch
 from torch.autograd import grad
+
 def fix_seeds():
     """
     Fix the seeds of numpy, torch and random to ensure reproducibility across
@@ -292,17 +292,17 @@ class Scheduler:
         self.learning_rate = learning_rate
         self.optimizer = optimizer
     def get_lr(self, iter_step):
-        warn_up = self.warm_up_end
+        warm_up = self.warm_up_end
         max_iter = self.maxiter
         init_lr = self.learning_rate
-        lr =  (iter_step / warn_up) if iter_step < warn_up else 0.5 * (math.cos((iter_step - warn_up)/(max_iter - warn_up) * math.pi) + 1) 
+        lr =  (iter_step / warm_up) if iter_step < warm_up else 0.5 * (math.cos((iter_step - warm_up)/(max_iter - warm_up) * math.pi) + 1) 
         lr = lr * init_lr
         return lr
     def update_learning_rate_np(self, iter_step):
-        warn_up = self.warm_up_end
+        warm_up = self.warm_up_end
         max_iter = self.maxiter
         init_lr = self.learning_rate
-        lr =  (iter_step / warn_up) if iter_step < warn_up else 0.5 * (math.cos((iter_step - warn_up)/(max_iter - warn_up) * math.pi) + 1) 
+        lr =  (iter_step / warm_up) if iter_step < warm_up else 0.5 * (math.cos((iter_step - warm_up)/(max_iter - warm_up) * math.pi) + 1) 
         lr = lr * init_lr
         for g in self.optimizer.param_groups:
             g['lr'] = lr

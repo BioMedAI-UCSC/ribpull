@@ -1,7 +1,6 @@
 import utils
 from models import NPullNetwork
 import torch
-import torch.nn.functional as F
 import wandb
 import opts
 import os
