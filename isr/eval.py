@@ -97,20 +97,29 @@ def select_ckpt(conf, args,input_points, bound_min, bound_max, ckpts):
         with torch.no_grad():
             input_tensor = torch.tensor(input_points, dtype=torch.float32).cuda()
             out = occ_network.sdf(input_tensor).softmax(1)
-            uncertainties = -(out[...,1] - out[...,0])  # This matches their uncertainty_inference
+            uncertainties = -(out[...,1] - out[...,0])
             median_uncertainty = torch.median(uncertainties).item()
         
         sdf_function = lambda pts: -uncertainty_inference(occ_network, pts)
         cd1, hd, mesh, _ = utils.validate_mesh(
             bound_min, bound_max, sdf_function, 
             resolution=conf.get_int('val.resolution'), 
-            threshold=median_uncertainty,  # <-- Use median uncertainty instead of 0.0
+            threshold=median_uncertainty,  
             point_gt=input_points,
             N_val=conf.get_int('val.n_val'),
             compute_dist_fn=utils.compute_dists
         ) 
         
         return {'cd1':cd1, 'hd':hd, 'mesh':mesh}
+    
+    start = time.time()
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [executor.submit(val_ckpt, ckpt) for ckpt in ckpts]
+        print('submit took: {:.2f} sec'.format(time.time() - start))
+        start = time.time()
+        scores = [future.result() for future in futures]
+        print('result took: {:.2f} sec'.format(time.time() - start))
+    return min(scores, key=lambda x: x['cd1'])
 
 def eval_pred_mesh(mesh, pointcloud_gt, normals_gt, n_points):
     """
