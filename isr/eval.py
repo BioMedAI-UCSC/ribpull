@@ -10,6 +10,8 @@ import numpy as np
 import concurrent.futures
 import time
 from pathlib import Path
+from datetime import datetime
+
 
 def load_inputs_with_bounds(shapepath, sigma, n_points):
 
@@ -209,7 +211,8 @@ if __name__ == '__main__':
     shapedata ,input_points, (bound_min, bound_max) = load_inputs_with_bounds(shapepath, n_points = 1024, sigma = 0.0)
 
     #occ_network = load_occ_network( conf, ckpt = 35, results_dir = args.results_dir).to(device)
-    ckpts = range(20, 41, 5)
+    #ckpts = range(10,20,5) if args.ckpts is None else args.ckpts
+    ckpts = [5]
     best_score = select_ckpt(conf, args, input_points, bound_min, bound_max, ckpts)
     
     # Save the best mesh
@@ -219,7 +222,19 @@ if __name__ == '__main__':
 
     # Generate slices using best checkpoint network
     heights = args.slice_heights if args.slice_heights else np.linspace(bound_min[0], bound_max[0], 5)
-    save_slices(best_score['network'], bound_min, bound_max, heights, name)
+    slice_name = os.path.join(args.results_dir, name)
+    save_slices(best_score['network'], bound_min, bound_max, heights, slice_name)
     print(f"Slices saved as {name}_slice_*.jpg")
     
-    print(eval_pred_mesh(best_score['mesh'], shapedata['pc'], shapedata['normals'], conf.get_int('val.n_val')))
+    results = eval_pred_mesh(best_score['mesh'], shapedata['pc'], shapedata['normals'], conf.get_int('val.n_val'))
+    print(results)
+
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    shapename = args.shapename.split('/')[-1]
+
+    log_file_path = os.path.join(args.results_dir, 'evaluation_log.txt')
+    with open(log_file_path, 'a') as f:
+        f.write(f"{current_date}, {shapename}, Chamfer-L1: {results.iloc[0]['chamfer-L1']:.6f}, Chamfer-L2: {results.iloc[0]['chamfer-L2']:.6f}, Normals: {results.iloc[0]['normals']}\n")
+
+    print(f"Results logged to {log_file_path}")
+

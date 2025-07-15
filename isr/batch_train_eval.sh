@@ -2,13 +2,13 @@
 
 # Configuration - Edit this array to define your files
 SHAPEPATHS=(
-    "normalized_points_file1.npz"
-    "normalized_points_file2.npz"
-    "normalized_points_file3.npz"
+    "normalized_points_"
+    "normalized_points2_"
+    "normalized_points3_"
 )
 
 # Parameters - Edit these values as needed
-CONFIG="conf.conf"
+CONFIG="configs/conf.conf"
 N_SURFACE=1000
 N_QUERIES=10000
 N_MINIMAX=1000
@@ -17,18 +17,10 @@ SIGMA=0.01
 
 # Generate experiment directories based on shapepath + current date
 CURRENT_DATE=$(date +"%d%m%Y")
-EXP_DIRS=()
-
-for shapepath in "${SHAPEPATHS[@]}"; do
-    # Extract filename without extension
-    filename=$(basename "$shapepath" .npz)
-    # Create experiment directory name: filename_DDMMYYYY
-    exp_dir="experiments/${filename}_${CURRENT_DATE}"
-    EXP_DIRS+=("$exp_dir")
-done
 
 echo "Starting batch training and evaluation..."
 echo "Files to process: ${#SHAPEPATHS[@]}"
+echo "File names: ${SHAPEPATHS[*]}"
 echo "Config: $CONFIG"
 echo "Parameters: n_surface=$N_SURFACE, n_queries=$N_QUERIES, n_minimax=$N_MINIMAX, lamda_max=$LAMDA_MAX, sigma=$SIGMA"
 echo "----------------------------------------"
@@ -36,7 +28,8 @@ echo "----------------------------------------"
 # Process each file
 for i in "${!SHAPEPATHS[@]}"; do
     SHAPEPATH="${SHAPEPATHS[$i]}"
-    EXP_DIR="${EXP_DIRS[$i]}"
+    filename=$(basename "$SHAPEPATH" .npz)  # Fixed: use $SHAPEPATH
+    EXP_DIR="experiments/${filename}${CURRENT_DATE}"
     
     echo "[$((i+1))/${#SHAPEPATHS[@]}] Processing: $SHAPEPATH -> $EXP_DIR"
     
