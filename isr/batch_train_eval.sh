@@ -1,19 +1,17 @@
 #!/bin/bash
 
-# Configuration - Edit this array to define your files
+# Configuration
 SHAPEPATHS=(
     "normalized_points_"
-    "normalized_points2_"
-    "normalized_points3_"
 )
 
-# Parameters - Edit these values as needed
+# Parameters
 CONFIG="configs/conf.conf"
 N_SURFACE=1000
 N_QUERIES=10000
 N_MINIMAX=1000
 LAMDA_MAX=10
-SIGMA=0.01
+SIGMA=0.00
 
 # Generate experiment directories based on shapepath + current date
 CURRENT_DATE=$(date +"%d%m%Y")

@@ -216,7 +216,7 @@ if __name__ == '__main__':
     best_score = select_ckpt(conf, args, input_points, bound_min, bound_max, ckpts)
     
     # Save the best mesh
-    name = Path(shapepath).name.split('-')[0]  # "RibFrac2"
+    name = Path(shapepath).name.split('-')[0]
     best_score['mesh'].export(name + '_best_mesh.obj')
     print(f"Best mesh saved as best_mesh.obj")
 

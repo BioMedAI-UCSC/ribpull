@@ -149,7 +149,7 @@ if __name__ == '__main__':
     conf = utils.load_conf(args.config)
     start_time = time.time()  # Record the start time
     if args.wandb_log:
-        utils.init_wandb (name = args.name, config = ribcage)
+        utils.init_wandb (name = args.name, config = conf)
     os.makedirs(args.exp_dir, exist_ok=True)
     main(args, conf,args.shapepath)
     end_time = time.time()    # Record the end time
