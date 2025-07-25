@@ -8,6 +8,15 @@ import numpy as np
 import time
 
 
+def apply_stochastic_preconditioning(coords, alpha=0.01):
+    """Apply stochastic preconditioning by adding Gaussian noise"""
+    coords += alpha * torch.randn_like(coords)
+    return coords
+
+def boundary_handling(coords):
+    """Clamp coordinates to valid range"""
+    return torch.clamp(coords, -1.0, 1.0)
+
 def entropy(out): return -(out.softmax(1) * out.log_softmax(1)).sum(1)
 def minimax_entropy (out , N_surface,lamda_min =1, lamda_max=1):
     entr = entropy(out)
@@ -94,6 +103,10 @@ def main(args, conf,shapepath):
         loss_sdf = torch.zeros(1)
         # Sample points and samples
         points, samples,_ = utils.np_train_data(point, sample, conf.get_int('train.batch_size'))
+
+        alpha = 0.05 * (0.01/0.05)**(iter_i/res_step)  # Decay from 0.05 to 0.01
+        samples = apply_stochastic_preconditioning(samples, alpha)
+        samples = boundary_handling(samples)
         
         # Compute the gradients of the uncertainty function at the sample points
         samples.requires_grad = True
@@ -113,6 +126,8 @@ def main(args, conf,shapepath):
         loss = 10*loss_sdf
         # Sample additional query points
         queries =  utils.sample_uniform_points(boxsize = max(bound_max)-min(bound_min) , n_points_uniform = args.n_queries)
+        queries = apply_stochastic_preconditioning(queries, alpha)
+        queries = boundary_handling(queries)
         # Set the query samples
         query_samples[:args.n_surface] = torch.from_numpy(subsample_pointcloud(noisy_points, args.n_surface) ).float().to('mps')
         query_samples[args.n_surface:] = queries
@@ -149,7 +164,7 @@ if __name__ == '__main__':
     conf = utils.load_conf(args.config)
     start_time = time.time()  # Record the start time
     if args.wandb_log:
-        utils.init_wandb (name = args.name, config = conf)
+        utils.init_wandb (name = args.name, config = ribcage)
     os.makedirs(args.exp_dir, exist_ok=True)
     main(args, conf,args.shapepath)
     end_time = time.time()    # Record the end time
