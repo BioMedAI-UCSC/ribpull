@@ -190,7 +190,7 @@ def render_single(mesh_file, output_path):
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python script.py output.png mesh1.ply mesh2.ply ...")s
+        print("Usage: python script.py output.png mesh1.ply mesh2.ply ...")
         sys.exit(1)
     
     output_path = sys.argv[1]
