@@ -1,49 +1,73 @@
-# Fracture detection in Low-Dose CT images using Neural Skeletons
+# RibPull: Implicit Occupancy Fields and Medial Axis Extraction for CT Ribcage Scans
 
-## Description
-The objectives of this research work are as following:
-- Perform skeleton extraction from segmenetd rib cages acquired from CT scans in point cloud format using Neural Skeletons
-- Perform fracture detection on the skeleton of the rib cage
-- Classify fracture between simple classes (non-displaced, displaced, open, closed)
-- Investigate fracture detection accuracy and precision under low radiation dose constraints
+**Accepted at SPIE Medical Imaging 2026**  
+*To be published in the conference proceedings*
 
-## Authors
-- Manolis Nikolakakis
-- Julie Digne
-- Razvan Marinescu
+## Contributors
 
-## Table of Contents
-- [Installation](#installation)
-- [Usage](#usage)
-- [Running Tests](#running-tests)
-- [License](#license)
+- **Emmanouil Nikolakakis** - UC Santa Cruz
+- **Amine Ouasfi** - Inria, Univ. Rennes, CNRS, IRISA, M2S
+- **Julie Digne** - LIRIS - CNRS - Université Claude Bernard Lyon 1
+- **Razvan Marinescu** - UC Santa Cruz
+
+---
+
+🚧 **Under Construction** 🚧
+
+> This repository is currently under active development. Code and documentation will be released upon publication.
+
+## Overview
+
+RibPull is a novel methodology that bridges computational geometry and medical imaging by utilizing implicit occupancy fields to represent CT-scanned ribcages. Our approach enables resolution-independent queries, direct medial axis extraction, and smooth morphological operations that are challenging with traditional discrete voxel-based methods.
+
+## Key Features
+
+- **Neural Occupancy Fields**: Continuous 3D representations that handle sparse and noisy medical imaging data
+- **SDF Conversion**: Transforms occupancy fields into signed distance fields for geometric analysis
+- **Medial Axis Extraction**: Laplacian-based contraction for robust skeletonization
+- **Memory Efficient**: Reduces storage by ~57% (from 4.2 MB to 1.8 MB per scan)
+- **Clinical Applications**: Enables fracture detection, scoliosis assessment, and surgical planning
+
+## Method Pipeline
+
+1. **CT Scan Input** → Volumetric computed tomography scan
+2. **RibSeg Segmentation** → Binary ribcage segmentation and point cloud extraction
+3. **Neural Occupancy Training** → SparseOcc learns implicit surface representation
+4. **Mesh Reconstruction** → Isosurface extraction via Marching Cubes
+5. **Medial Axis Extraction** → Laplacian-based contraction for skeleton generation
+
+## Dataset
+
+This work uses the **RibSeg dataset**, which extends the RibFrac challenge dataset with:
+- 20 manually annotated CT ribcage scans
+- High-quality radiologist annotations
+- Detailed rib labeling and anatomical centerlines
 
 ## Installation
-(tba)
-
 ```bash
-git clone https://github.com/yourusername/ct-shape-analysis.git
-cd ct-shape-analysis
+# Coming soon upon publication
 ```
 
 ## Usage
-Run test with cave_rib point cloud
-
-```bash
-python main.py input_file output_file
+```python
+# Example code will be provided upon release
 ```
 
-## Running Tests
-Run test with cave_rib point cloud
+## Citation
 
-```bash
-python main.py test/cave_rib_input/cave.xyz cave_skeleton.obj
+If you find this work useful, please cite our paper:
+```bibtex
+@article{nikolakakis2025ribpull,
+  title={RibPull: Implicit Occupancy Fields and Medial Axis Extraction for CT Ribcage Scans},
+  author={Nikolakakis, Emmanouil and Ouasfi, Amine and Digne, Julie and Marinescu, Razvan},
+  journal={arXiv preprint arXiv:2509.01402},
+  year={2025}
+}
 ```
-
-## License
-(tba)
 
 ## Acknowledgments
-- Repository based on the following by Mattéo Clémot and Julie Digne: https://github.com/MClemot/SkeletonLearning/tree/main
-- We are currently making use of the RibFrac Dataset from the FracNet 2020 challenge 
 
+We gratefully acknowledge:
+- The authors of **RibSeg** for making their benchmark dataset publicly available
+- The creators of the **RibFrac** dataset for their contributions to medical imaging research
+- **SparseOcc** methodology by Ouasfi et al. for unsupervised occupancy learning
