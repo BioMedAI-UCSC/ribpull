@@ -12,10 +12,6 @@
 
 ---
 
-🚧 **Under Construction** 🚧
-
-> This repository is currently under active development. Code and documentation will be released upon publication.
-
 ## Overview
 
 RibPull is a novel methodology that bridges computational geometry and medical imaging by utilizing implicit occupancy fields to represent CT-scanned ribcages. Our approach enables resolution-independent queries, direct medial axis extraction, and smooth morphological operations that are challenging with traditional discrete voxel-based methods.
